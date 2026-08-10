@@ -20,6 +20,7 @@ export function RulesListPage({ onEdit }: RulesListPageProps) {
   if (draft.rules.length === 0) {
     return (
       <div className="page empty-state">
+        <div className="empty-state-icon">⚡</div>
         <h2>Create your first rule</h2>
         <p>
           Rules watch live Signal K values and drive your switches — no Node-RED

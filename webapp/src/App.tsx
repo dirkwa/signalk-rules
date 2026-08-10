@@ -42,7 +42,9 @@ export function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Rules</h1>
+        <h1>
+          Rules <span className="app-version">v{__PLUGIN_VERSION__}</span>
+        </h1>
         <nav>
           <button
             type="button"
