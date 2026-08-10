@@ -98,6 +98,11 @@ as bus deltas because real switching confirms state on the bus.
 - Strict TS both tsconfigs (`strict`, `noUncheckedIndexedAccess`,
   `verbatimModuleSyntax`). `tsconfig.json` needs `"types": ["node"]` —
   TypeScript 6 no longer auto-includes `node_modules/@types`.
+- **Every change goes through a PR** — never commit directly to
+  `master`. Branch names use hyphens, never slashes.
+- **Version bumps live in their own `chore(release): X.Y.Z` PR** with
+  no code changes mixed in (CodeRabbit skips review on that title;
+  the tag push after merge triggers the npm publish workflow).
 - Never auto-commit, never auto-push. No release work unless asked.
 - Comments explain WHY, not what. No AI attribution anywhere.
-- PRs: succinct, only tests actually performed.
+- PRs: succinct, only tests actually performed. No checkboxes.
