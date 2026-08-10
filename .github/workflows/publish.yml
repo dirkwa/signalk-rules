@@ -1,0 +1,46 @@
+# Publish to npm with OIDC-attested provenance on every `v*` tag push.
+#
+# OIDC trust between this repo and npmjs replaces the long-lived
+# NPM_TOKEN secret — the workflow exchanges its short-lived OIDC token
+# for an npm publish token at the moment of `npm publish`. The npm CLI
+# must be >= 11 for the exchange to actually happen (older CLIs
+# silently fall back to anonymous publish, which 404s). Node 22 in
+# actions/setup-node@v6 currently ships npm 10.9.x, so we install
+# npm@^11 first.
+#
+# The package.json `repository.url` must match this repo's GitHub URL
+# verbatim or the OIDC attestation fails with HTTP 422.
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write # OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm to v11+ (needed for OIDC token exchange)
+        run: npm install -g npm@^11
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build + lint + test
+        run: npm run build:all
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public

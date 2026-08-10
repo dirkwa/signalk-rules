@@ -1,0 +1,28 @@
+# Calls the shared SignalK reusable workflow which tests this plugin
+# across Linux x64, Linux arm64, macOS, and Windows. Node 22 (matches
+# package.json engines) plus 24.
+
+name: SignalK Plugin CI
+
+on:
+  # Only run on push to master so that a same-repo PR (which also
+  # pushes its branch) doesn't double-trigger and burn two CI runs per
+  # update. PRs from any branch — same-repo or fork — still go through
+  # the pull_request trigger.
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  test-plugin:
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
+    with:
+      test-command: npm test
+      build-command: npm run build --if-present
+      format-check-command: npm run format:check
+      node-versions: '["22","24"]'
+      enable-armv7: false
+      enable-signalk-integration: false

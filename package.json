@@ -1,0 +1,84 @@
+{
+  "name": "signalk-rules",
+  "version": "0.1.0",
+  "description": "Simple rules engine for switching automation: WHEN conditions on Signal K paths THEN switch/pulse/notify — configured in a friendly webapp",
+  "main": "plugin/index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./plugin/index.d.ts",
+      "import": "./plugin/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dirkwa/signalk-rules.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dirkwa/signalk-rules/issues"
+  },
+  "homepage": "https://github.com/dirkwa/signalk-rules#readme",
+  "engines": {
+    "node": ">=22.5.0",
+    "signalk": ">=2.24.0"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-webapp",
+    "signalk-category-digital-switching",
+    "automation",
+    "rules",
+    "switching"
+  ],
+  "signalk-plugin-enabled-by-default": true,
+  "signalk": {
+    "displayName": "Rules",
+    "appIcon": "icon.svg",
+    "webapp": {
+      "name": "Rules",
+      "description": "Simple switching-automation rules: solar water heater, anchor light, generator autostart — no Node-RED required"
+    }
+  },
+  "files": [
+    "plugin/**/*",
+    "public/**/*"
+  ],
+  "scripts": {
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"webapp/**/*.{ts,tsx,html}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"webapp/**/*.{ts,tsx,html}\"",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"webapp/**/*.{ts,tsx}\"",
+    "typecheck:webapp": "tsc -p tsconfig.webapp.json",
+    "build:plugin": "tsc",
+    "build:webapp": "vite build",
+    "build": "npm run build:plugin && npm run typecheck:webapp && npm run build:webapp",
+    "build:all": "npm run lint && npm run build && npm run test",
+    "dev": "vite",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@signalk/server-api": "*",
+    "suncalc": "^1.9.0",
+    "typebox": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/suncalc": "^1.9.2",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "eslint": "^10.4.1",
+    "prettier": "^3.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.0.0",
+    "zustand": "^5.0.0"
+  }
+}
