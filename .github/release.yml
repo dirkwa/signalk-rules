@@ -1,0 +1,15 @@
+# Auto-generated release notes (SignalK plugin release-notes convention)
+changelog:
+  exclude:
+    labels:
+      - dependencies
+  categories:
+    - title: New features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Other changes
+      labels:
+        - '*'
