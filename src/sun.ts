@@ -1,4 +1,4 @@
-import SunCalc from 'suncalc'
+import * as SunCalc from 'suncalc'
 
 export interface Position {
   latitude: number
@@ -46,22 +46,16 @@ export class SunTracker {
     if (!this.last) return null
     const { latitude, longitude } = this.last
     const times = SunCalc.getTimes(now, latitude, longitude)
-    const sunrise = times.sunrise?.getTime()
-    const sunset = times.sunset?.getTime()
-    if (
-      sunrise === undefined ||
-      sunset === undefined ||
-      Number.isNaN(sunrise) ||
-      Number.isNaN(sunset)
-    ) {
-      // Polar day/night: no sunrise/sunset today. Fall back to solar
-      // altitude (offsets are meaningless without an event to offset).
-      return SunCalc.getPosition(now, latitude, longitude).altitude > 0
-    }
+    // Polar day/night: there is no rise/set event to offset against.
+    if (times.alwaysUp === true) return true
+    if (times.alwaysDown === true) return false
+    const sunrise = times.sunrise
+    const sunset = times.sunset
+    if (sunrise === null || sunset === null) return null
     const t = now.getTime()
     return (
-      t >= sunrise + startOffsetMin * 60_000 &&
-      t < sunset + endOffsetMin * 60_000
+      t >= sunrise.getTime() + startOffsetMin * 60_000 &&
+      t < sunset.getTime() + endOffsetMin * 60_000
     )
   }
 }
