@@ -5,7 +5,7 @@
 # for an npm publish token at the moment of `npm publish`. The npm CLI
 # must be >= 11 for the exchange to actually happen (older CLIs
 # silently fall back to anonymous publish, which 404s). Node 22 in
-# actions/setup-node@v6 currently ships npm 10.9.x, so we install
+# actions/setup-node@v7 currently ships npm 10.9.x, so we install
 # npm@^11 first.
 #
 # The package.json `repository.url` must match this repo's GitHub URL
@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
