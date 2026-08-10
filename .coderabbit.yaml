@@ -1,0 +1,198 @@
+language: en-US
+
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - 'chore(release):'
+      - 'chore(deps):'
+      - 'chore(deps-dev):'
+      - 'chore(bump):'
+      - '[skip review]'
+      - 'WIP'
+    ignore_usernames:
+      - 'release-please[bot]'
+      - 'renovate[bot]'
+      - 'dependabot[bot]'
+      - 'github-actions[bot]'
+
+  path_filters:
+    - '!**/package-lock.json'
+    - '!**/yarn.lock'
+    - '!**/pnpm-lock.yaml'
+    - '!**/*.min.js'
+    - '!**/*.min.css'
+    - '!**/dist/**'
+    - '!**/build/**'
+    - '!**/plugin/**'
+    - '!**/public/**'
+    - '!**/node_modules/**'
+    - '!**/*.tgz'
+    - '!**/cr-review*.txt'
+
+  high_level_summary_instructions: |
+    Write summaries in present tense. Describe what the code does, not what
+    it did. Skip filler like "This PR" — go straight to the change.
+
+  path_instructions:
+    - path: '**/*'
+      instructions: |
+        ## Scope
+
+        Focus on files changed since `master`. Think about how changes
+        interact with the rest of the stack, not just the diff in
+        isolation.
+
+        signalk-rules is a **SignalK plugin + standalone webapp** in one
+        npm package: a simple rules engine for switching automation
+        ("WHEN conditions THEN switch/pulse/notify"), configured in a
+        sentence-style Material Design 3 web UI.
+
+        1. **Plugin (`src/`, TypeScript ESM, runs in the SignalK server
+           process)** — subscribes to self deltas via
+           `app.streambundle.getSelfBus`, evaluates rules, issues switch
+           commands via `app.putSelfPath` (whatever plugin registered
+           the path's action handler executes them), emits
+           `notifications.*` via `app.handleMessage`.
+        2. **Webapp (`webapp/`, Vite + React 19 + zustand 5, keyword
+           `signalk-webapp`)** — builds to `public/`, served at
+           `/signalk-rules/`, talks to the plugin's REST under
+           `/plugins/signalk-rules/` with implicit cookie auth.
+
+        ## Shared schema is the contract
+
+        `src/shared/` is compiled by the plugin tsconfig (node16, ESM,
+        `.js` import suffixes) AND bundled by Vite for the webapp.
+        Files there must import ONLY `typebox` — flag any import of
+        `@signalk/server-api`, express, or node builtins inside
+        `src/shared/`.
+
+        TypeBox is **1.x from the `typebox` package** — flag any
+        suggestion or import of `@sinclair/typebox` (the 0.x line).
+        Validation uses `Check`/`Errors`/`Default`/`Clone` from
+        `typebox/value` (ajv-style errors with `instancePath`).
+
+        ## Engine semantics — do not weaken
+
+        - **Edge-triggered.** Rules command only on decision
+          *transitions*; `applySetSwitch` compares against the last
+          observed actual value and skips the PUT when it already
+          agrees. Manual overrides must stick between transitions.
+          Only the opt-in reassert timer may override a manual change.
+          Flag any change that re-PUTs on every evaluation.
+        - **Unknown holds.** Missing/stale input ⇒ condition `unknown`
+          ⇒ Kleene combine ⇒ the rule holds its committed decision and
+          acts on nothing. Flag anything that lets stale data flap an
+          output or treats `unknown` as `false`.
+        - **Durations on monotonic time** (`RuleClock.monoMs`), wall
+          clock only for display and time/sun conditions. Flag
+          `Date.now()` arithmetic in hold/cooldown/pulse logic.
+        - **Raw SI units everywhere** in the engine and stored rules
+          (m/s, ratio 0-1, K, Pa). Unit conversion lives only in the
+          webapp's `unitConvert.ts` input/display layer. Flag any
+          engine-side conversion or display-unit values in schemas.
+
+        ## Pulse safety ordering — never reorder
+
+        In `PulseManager.start` the pulse record is persisted
+        synchronously to disk BEFORE the ON-PUT energizes the output;
+        start-up (`restoreAndRevert`) reverts any record found on
+        disk; `stop()` reverts before teardown; the revert PUT retries
+        forever. Flag ANY reordering, made-async persistence, or
+        removal of these steps — a crash mid-pulse must never leave a
+        starter engaged. The 60 s schema cap on pulse duration is
+        deliberate; flag attempts to raise it.
+
+        ## All PUTs via PutExecutor
+
+        Per-path serialization, ≥2 s spacing, latest-wins queueing,
+        one retry, 25 s terminal-reply timeout. `putSelfPath`'s
+        promise may resolve PENDING; the terminal reply arrives via
+        the update callback. Flag direct `putSelfPath` calls outside
+        `actions.ts` (exception: `PulseManager`'s stop-time direct
+        fail-safe revert, which is intentional).
+
+        ## Webapp architecture
+
+        - **One WebSocket** (liveStore), subscribed to the union of
+          draft-referenced paths; engine truth polls `GET /state` at
+          2 s. Reconnect with backoff is deliberate (nav-station
+          monitoring surface) — flag its removal.
+        - Three separate zustand stores (rulesStore/liveStore/
+          metaStore), cross-store access via `getState()` in actions,
+          never subscriptions. Components select narrowly.
+        - displayName renames PUT `<path>.meta.displayName` to the SK
+          server (persisted server-side in baseDeltas) — flag any
+          local-only name storage.
+        - **No secure-context-only browser APIs** without a fallback:
+          boat servers are plain HTTP on the LAN. `crypto.randomUUID`
+          already bit us once — flag it and friends (clipboard API,
+          etc.) unless feature-detected with a working fallback.
+        - MD3 theme: dark-only by design, token names `--md-sys-*`
+          shared with signalk-charts-provider-simple. 48px minimum
+          touch targets — flag interactive elements below that.
+
+        ## ESM / TypeScript strict / Node 22+
+
+        - `"type": "module"` — plugin-side relative imports use the
+          `.js` suffix (node16 resolution). Do not suggest dropping it.
+        - Both tsconfigs run the full strict set incl.
+          `noUncheckedIndexedAccess` and `verbatimModuleSyntax`. Code
+          must narrow against `undefined` when reading array slots or
+          record entries; flag `arr[i]!.foo` and `as any`.
+        - `tsconfig.json` needs `"types": ["node"]` — TypeScript 6 no
+          longer auto-includes `node_modules/@types`. Flag its removal.
+
+        ## Never crash signalk-server
+
+        On any failure path, `app.setPluginError(...)` — never throw
+        out of `start()` or the tick loop. A corrupt rules.json loads
+        as an empty doc plus a plugin error, not a crash. Flag
+        unguarded throws in plugin code paths.
+
+        ## Echo comments
+
+        Flag comments that restate what the code already says.
+        Comments explain *why*, not *what*.
+
+        ## Documentation drift risk
+
+        Flag `.md` files containing implementation-status wording,
+        step-by-step narratives duplicating code, or specific config
+        values likely to go stale. Architecture rationale is fine.
+
+        ## Commit / PR conventions
+
+        - Angular conventional commits: `<type>(<scope>): <subject>`,
+          subject ≤ 50 chars, imperative, no period.
+        - One logical change per commit and per PR.
+        - **No AI attribution** in commits, PR bodies, or code. No
+          `Co-Authored-By` trailers.
+        - **No version bumps** in feature/fix PRs. Versions are bumped
+          only in dedicated `chore(release):` PRs when explicitly
+          requested.
+        - PR descriptions: no checkboxes. "Tested" lists what actually
+          ran.
+
+        ## What NOT to flag
+
+        These are intentional:
+
+        - `router.access()` feature detection in `api.ts` — published
+          @signalk/server-api 2.30 lacks the type; older servers fall
+          back to plugin-default (admin-only) routes.
+        - Notifications via `app.handleMessage` instead of
+          `app.notifications.raise` — the raise API throws when the
+          server's notification manager is disabled.
+        - Synchronous fs writes in `store.saveRuntimeStateSync` — they
+          gate pulse safety and must hit disk before the ON-PUT.
+        - The engine-test harness echoing PUTs back as bus deltas —
+          real switching confirms state on the bus.
+        - Templates created `enabled: false` + `dryRun: true` — safe
+          by default until the user picks real paths.
+        - The dark-only theme with no light variant.
+        - `cooldownSeconds` accepted but warned-on for non-pulse rules
+          (non-fatal validation warning, not an error).

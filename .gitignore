@@ -2,4 +2,5 @@ node_modules/
 plugin/
 public/
 *.tgz
+cr-review*.txt
 .DS_Store
