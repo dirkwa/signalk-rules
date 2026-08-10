@@ -39,12 +39,20 @@
     "webapp": {
       "name": "Rules",
       "description": "Simple switching-automation rules: solar water heater, anchor light, generator autostart — no Node-RED required"
-    }
+    },
+    "recommends": [
+      "signalk-n2k-switching"
+    ],
+    "screenshots": [
+      "./docs/screenshots/rules1.png",
+      "./docs/screenshots/rules2.png"
+    ]
   },
   "files": [
     "plugin/**/*",
     "public/**/*",
-    "icon.svg"
+    "icon.svg",
+    "docs/screenshots"
   ],
   "scripts": {
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"webapp/**/*.{ts,tsx,html}\"",
