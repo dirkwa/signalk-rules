@@ -42,5 +42,22 @@ jobs:
       - name: Build + lint + test
         run: npm run build:all
 
+      # A tag can point at a version that was already published (e.g.
+      # the very first release goes out locally because npm trusted
+      # publishing can only be configured on an existing package).
+      # Make the tag push a green no-op in that case instead of a
+      # confusing red "cannot publish over" failure.
+      - name: Check whether this version is already on npm
+        id: check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "signalk-rules@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "signalk-rules@$VERSION already on npm — skipping publish"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm with provenance
+        if: steps.check.outputs.published == 'false'
         run: npm publish --provenance --access public
