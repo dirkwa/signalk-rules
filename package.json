@@ -1,6 +1,6 @@
 {
   "name": "signalk-rules",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Simple rules engine for switching automation: WHEN conditions on Signal K paths THEN switch/pulse/notify — configured in a friendly webapp",
   "main": "plugin/index.js",
   "type": "module",
