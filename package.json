@@ -11,7 +11,7 @@
     },
     "./package.json": "./package.json"
   },
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dirkwa/signalk-rules.git"
@@ -52,7 +52,10 @@
     "plugin/**/*",
     "public/**/*",
     "icon.svg",
-    "docs/screenshots"
+    "docs/screenshots",
+    "LICENSE.md",
+    "LICENSE-Apache-2.0-through-v1.x.txt",
+    "README.md"
   ],
   "scripts": {
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"webapp/**/*.{ts,tsx,html}\"",

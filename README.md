@@ -94,4 +94,18 @@ See [AGENTS.md](AGENTS.md) for architecture invariants.
 
 ## License
 
-Apache-2.0
+signalk-rules 2.0.0 and later is **source available, not open source**.
+See [LICENSE.md](LICENSE.md).
+
+**You may**, free of charge: run it on your own boat or fleet, private or
+commercial; use it for internal company operations; modify it for your own use;
+use it in non-commercial education and research; and provide professional
+services to others who use it under these terms.
+
+**You may not**: redistribute modified versions or derivative works, or publish
+them to npm or anywhere else. Unmodified official releases may be mirrored,
+cached and redistributed verbatim as long as the notices stay intact and the
+license terms are included.
+
+Versions 1.0.0 and earlier remain available under the Apache-2.0 license
+(see [LICENSE-Apache-2.0-through-v1.x.txt](LICENSE-Apache-2.0-through-v1.x.txt)).
