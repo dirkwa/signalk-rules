@@ -7,7 +7,7 @@
  *
  * All numeric thresholds are RAW Signal K units as they appear on the
  * bus (m/s, ratio 0-1, volts). The webapp converts for display; the
- * engine never converts.
+ * engine converts only a value it quotes in a notification message.
  */
 import { Type, type Static } from 'typebox'
 

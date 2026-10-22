@@ -1,5 +1,6 @@
 import type { ActionT, NotificationActionT } from '../../../src/shared/schemas'
 import { PathButton } from './PathPicker'
+import { useMetaStore } from '../stores/metaStore'
 
 const STATES: NotificationActionT['state'][] = [
   'normal',
@@ -16,6 +17,8 @@ interface ActionRowProps {
   onRemove(): void
   canRemove: boolean
   errorFields: Set<string>
+  /** Paths the rule's conditions read: the values a message may quote. */
+  valuePaths: readonly string[]
 }
 
 export function ActionRow({
@@ -24,7 +27,8 @@ export function ActionRow({
   onChange,
   onRemove,
   canRemove,
-  errorFields
+  errorFields,
+  valuePaths
 }: ActionRowProps) {
   return (
     <div className="action-row">
@@ -43,6 +47,14 @@ export function ActionRow({
           onChange={onChange}
           errorFields={errorFields}
         />
+        {action.type === 'notification' && valuePaths.length > 0 && (
+          <MessageValues
+            paths={valuePaths}
+            onInsert={(path) =>
+              onChange({ ...action, message: `${action.message} {${path}}` })
+            }
+          />
+        )}
       </div>
       {canRemove && (
         <button
@@ -55,6 +67,34 @@ export function ActionRow({
         </button>
       )}
     </div>
+  )
+}
+
+/** Inserts `{path}`, which the engine fills with the value when the
+ *  notification is raised. */
+function MessageValues({
+  paths,
+  onInsert
+}: {
+  paths: readonly string[]
+  onInsert(path: string): void
+}) {
+  const known = useMetaStore((s) => s.paths)
+  return (
+    <span className="message-values">
+      <span className="hint">insert value:</span>
+      {paths.map((path) => (
+        <button
+          key={path}
+          type="button"
+          className="btn"
+          title={`Adds {${path}} — replaced with its value when raised`}
+          onClick={() => onInsert(path)}
+        >
+          {known[path]?.displayName ?? path}
+        </button>
+      ))}
+    </span>
   )
 }
 

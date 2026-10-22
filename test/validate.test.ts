@@ -275,4 +275,48 @@ describe('validateRulesDoc', () => {
       )
     }
   })
+
+  describe('notification message placeholders', () => {
+    const notify = (message: string): RuleT =>
+      baseRule({
+        actions: [
+          {
+            type: 'notification',
+            pathSuffix: 'solar.high',
+            state: 'alert',
+            method: ['visual'],
+            message
+          }
+        ]
+      })
+
+    it('accepts a placeholder for a path a condition reads', () => {
+      const r = validateRulesDoc(
+        doc(notify('Solar at {electrical.solar.258.current}'))
+      )
+      expect(r.ok).toBe(true)
+    })
+
+    it('warns about a placeholder for a path no condition reads', () => {
+      // A warning, not an error: a message saved before placeholders
+      // existed must not refuse the whole file on upgrade.
+      const r = validateRulesDoc(
+        doc(notify('Battery {electrical.batteries.house.voltage}'))
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([
+        {
+          path: '/rules/0/actions/0/message',
+          message:
+            '{electrical.batteries.house.voltage} is not read by a condition of this rule, so it stays as written',
+          ruleId: 'aaaaaaaa-1111-2222-3333-444444444444'
+        }
+      ])
+    })
+
+    it('treats braces that are not a path as text', () => {
+      const r = validateRulesDoc(doc(notify('Solar {high} {}')))
+      expect(r.ok).toBe(true)
+    })
+  })
 })

@@ -59,8 +59,9 @@ a sentence-style web UI. Two halves in one npm package:
    timeout. `putSelfPath`'s promise may resolve PENDING; the terminal
    reply arrives via the update callback.
 8. **Raw SI units everywhere in the engine and stored rules.** The
-   webapp converts (kn/%/°C) only at input widgets and display
-   (`unitConvert.ts`).
+   webapp converts (kn/%/°C) only at input widgets and display, and
+   the engine only where it writes a value into a notification
+   message's `{path}` placeholder. Both use `src/shared/units.ts`.
 9. **One WebSocket** in the webapp (liveStore), subscribed to the
    union of draft-referenced paths; engine truth comes from polling
    `GET /state` (2 s). Reconnect with backoff is deliberate (nav

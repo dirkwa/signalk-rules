@@ -127,7 +127,7 @@ function evalRaw(cond: ConditionT, state: CondState, ctx: EvalContext): Tri {
   }
 }
 
-function freshReading(
+export function freshReading(
   cond: { path: string; staleSeconds?: number },
   ctx: EvalContext
 ): InputReading | null {

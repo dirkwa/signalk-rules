@@ -695,6 +695,14 @@ input[type='checkbox'] {
   flex-wrap: wrap;
 }
 
+.message-values {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--md-sys-spacing-2);
+  flex-wrap: wrap;
+}
+
 .cond-advanced {
   display: flex;
   align-items: center;

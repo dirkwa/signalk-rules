@@ -50,6 +50,14 @@ registers action handlers works (e.g. `signalk-n2k-switching` for
 NMEA 2000 relay banks). Rules can additionally raise
 `notifications.*` with a chosen state and message.
 
+A message can quote a value the rule's conditions read: `{path}` is
+replaced when the notification is raised, in the units the editor
+shows (`Fridge at {environment.inside.refrigerator.temperature}`
+becomes *Fridge at 12.2 °C*). A missing or stale value reads `?`, and
+the clearing notification keeps the text it was raised with. Braces
+around anything else, including a path no condition reads, stay as
+written; the editor warns about the latter.
+
 ## Webapp
 
 The **Rules** webapp (Webapps section of the server UI) provides:

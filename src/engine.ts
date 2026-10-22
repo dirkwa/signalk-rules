@@ -1,5 +1,7 @@
 import type { RuleT, RulesDocT, SetSwitchActionT } from './shared/schemas.js'
 import { DEFAULTS } from './shared/schemas.js'
+import { MISSING_VALUE, renderMessage } from './shared/message.js'
+import { formatValue } from './shared/units.js'
 import type {
   ConditionState,
   EngineState,
@@ -10,6 +12,7 @@ import type {
 import {
   combine,
   evalCondition,
+  freshReading,
   initialCondState,
   type EvalContext,
   type InputReading
@@ -78,6 +81,8 @@ export interface EngineDeps {
   getCurrent(path: string): unknown
   put: PutFn
   sendDelta(delta: object): void
+  /** SI unit of a self path from its metadata, for message values. */
+  getUnits?(path: string): string | undefined
   setStatus(msg: string): void
   setError(msg: string): void
   debug(msg: string): void
@@ -97,6 +102,9 @@ interface TrackedRule {
    *  otherwise the rule baselines against the actual state again. */
   unconfirmedPuts: number
   failedTargets: Set<string>
+  /** Message each notification action was raised with, by action
+   *  index, so its clear carries the same text. */
+  raisedMessages: Map<number, string>
 }
 
 export class Engine {
@@ -197,6 +205,7 @@ export class Engine {
       // Rules still present keep in-flight pulses (revert timer intact).
     }
 
+    const previous = new Map(this.tracked)
     this.tracked.clear()
     const restoredOn: TrackedRule[] = []
     for (const rule of doc.rules) {
@@ -206,7 +215,8 @@ export class Engine {
         runtime: new RuleRuntime(rule, this.clock),
         lastTruths: rule.conditions.map(() => 'unknown' as Tri),
         unconfirmedPuts: 0,
-        failedTargets: new Set()
+        failedTargets: new Set(),
+        raisedMessages: new Map()
       }
       const prior = Object.hasOwn(carried, rule.id)
         ? carried[rule.id]
@@ -216,6 +226,9 @@ export class Engine {
           prior.conditionsKey === conditionsKey(rule) ? prior.latched : []
         t.runtime.restore(prior.decision, prior.sinceWall, latched)
         if (prior.decision === 'on') restoredOn.push(t)
+        // Same actions, so the indexes still name the same notifications.
+        const before = previous.get(rule.id)
+        if (before !== undefined) t.raisedMessages = before.raisedMessages
       }
       this.tracked.set(rule.id, t)
     }
@@ -482,10 +495,15 @@ export class Engine {
       case 'notification': {
         const clearOnFalse = action.clearOnFalse ?? true
         if (edge === 'falling' && !clearOnFalse) break
+        const index = t.rule.actions.indexOf(action)
+        const message =
+          edge === 'rising'
+            ? this.renderMessage(t.rule, action.message)
+            : (t.raisedMessages.get(index) ?? action.message)
         const value = {
           state: edge === 'rising' ? action.state : 'normal',
           method: edge === 'rising' ? [...action.method] : [],
-          message: action.message
+          message
         }
         if (t.rule.dryRun) {
           t.runtime.recordAction({
@@ -494,10 +512,12 @@ export class Engine {
             target: `notifications.${action.pathSuffix}`,
             value: value.state,
             result: 'ok',
-            detail: 'would notify'
+            detail: `would notify: ${message}`
           })
           break
         }
+        if (edge === 'rising') t.raisedMessages.set(index, message)
+        else t.raisedMessages.delete(index)
         this.deps.sendDelta(notificationDelta(action.pathSuffix, value))
         t.runtime.recordAction({
           ts: this.clock.wallMs(),
@@ -571,17 +591,61 @@ export class Engine {
 
   private emitNotificationClear(t: TrackedRule): void {
     if (t.runtime.decision !== 'on' || t.rule.dryRun) return
-    for (const action of t.rule.actions) {
+    t.rule.actions.forEach((action, index) => {
       if (action.type === 'notification' && (action.clearOnFalse ?? true)) {
         this.deps.sendDelta(
           notificationDelta(action.pathSuffix, {
             state: 'normal',
             method: [],
-            message: action.message
+            message: t.raisedMessages.get(index) ?? action.message
           })
         )
       }
+    })
+  }
+
+  /** Fills a message's placeholders with the values the rule's own
+   *  conditions read: a value counts as long as one of them would
+   *  still trust it. A path no condition reads stays as written. */
+  private renderMessage(rule: RuleT, message: string): string {
+    const ctx = this.evalContext()
+    return renderMessage(message, (path) => {
+      const readers = rule.conditions.filter(
+        (c) => 'path' in c && c.path === path
+      )
+      if (readers.length === 0) return `{${path}}`
+      for (const cond of readers) {
+        if (!('path' in cond)) continue
+        const reading = freshReading(cond, ctx)
+        if (reading !== null) return this.formatReading(path, reading.value)
+      }
+      return MISSING_VALUE
+    })
+  }
+
+  private formatReading(path: string, value: unknown): string {
+    if (value === undefined || value === null) return MISSING_VALUE
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      return MISSING_VALUE
     }
+    let units: string | undefined
+    try {
+      units = this.deps.getUnits?.(path)
+    } catch {
+      // A unit lookup is cosmetic: it must never keep a message from
+      // going out.
+      units = undefined
+    }
+    // Without a unit there is nothing to convert, and a count or a
+    // switch state reads better as 3 than as 3.0.
+    if (
+      units === undefined &&
+      typeof value === 'number' &&
+      Number.isInteger(value)
+    ) {
+      return String(value)
+    }
+    return formatValue(value, units)
   }
 
   // ------------------------------------------------------------------ status
@@ -776,7 +840,7 @@ export class Engine {
       } else {
         wouldDo.push(
           raw === 'true'
-            ? `raise notifications.${action.pathSuffix} (${action.state})`
+            ? `raise notifications.${action.pathSuffix} (${action.state}): ${this.renderMessage(rule, action.message)}`
             : `clear notifications.${action.pathSuffix}`
         )
       }

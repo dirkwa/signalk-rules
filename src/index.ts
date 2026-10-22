@@ -92,6 +92,21 @@ const plugin = (app: ServerAPI): Plugin => {
           getCurrent: (path) => app.getSelfPath(path),
           put: (path, value, cb) => app.putSelfPath(path, value, cb),
           sendDelta: (delta) => app.handleMessage(PLUGIN_ID, delta as Delta),
+          getUnits: (path) => {
+            // The boat's own meta first, as the webapp reads it; the
+            // spec's lookup wants a context-qualified path.
+            const node: unknown = app.getSelfPath(path)
+            const own =
+              node !== null && typeof node === 'object' && 'meta' in node
+                ? (node.meta as { units?: unknown } | undefined)?.units
+                : undefined
+            // Optional so an older server without getMetadata cannot fail a raise.
+            const spec = (
+              app.getMetadata as typeof app.getMetadata | undefined
+            )?.(`vessels.self.${path}`)
+            const units = own ?? spec?.units
+            return typeof units === 'string' ? units : undefined
+          },
           setStatus: (msg) => app.setPluginStatus(msg),
           setError: (msg) => app.setPluginError(msg),
           debug: (msg) => app.debug(msg),
