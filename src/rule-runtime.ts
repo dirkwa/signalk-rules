@@ -28,6 +28,8 @@ export class RuleRuntime {
   lastRaw: Tri = 'unknown'
   pending: { to: 'on' | 'off'; sinceMono: number } | null = null
   private nextReassertAtMono: number | null = null
+  /** A restored decision not yet confirmed by known input. */
+  private restoredUnconfirmed = false
   lastActions: ActionRecord[] = []
   error: string | null = null
 
@@ -57,6 +59,10 @@ export class RuleRuntime {
       const target: 'on' | 'off' = raw === 'true' ? 'on' : 'off'
       if (target === this.decision) {
         this.pending = null
+        if (this.restoredUnconfirmed) {
+          this.restoredUnconfirmed = false
+          this.armReassert(mono)
+        }
       } else {
         if (this.pending === null || this.pending.to !== target) {
           this.pending = { to: target, sinceMono: mono }
@@ -69,6 +75,7 @@ export class RuleRuntime {
           this.decision = target
           this.decisionSinceWall = this.clock.wallMs()
           this.pending = null
+          this.restoredUnconfirmed = false
           effects.push({
             kind: 'edge',
             edge: target === 'on' ? 'rising' : 'falling'
@@ -88,6 +95,31 @@ export class RuleRuntime {
     }
 
     return effects
+  }
+
+  /**
+   * Take over a decision committed before a restart or reload, so that
+   * coming back is not a transition: a manual override made since stays.
+   * `latched` are the conditions' hysteresis latches from then, or empty
+   * when the conditions changed; without them a value inside a band
+   * would read as false and turn the rule off without a transition.
+   * A reassert, if configured, waits for known input that agrees, as one
+   * waits for the first commit: a decision read back from disk is not
+   * enforced on its own.
+   */
+  restore(
+    decision: 'on' | 'off',
+    sinceWall: number,
+    latched: readonly boolean[]
+  ): void {
+    this.decision = decision
+    this.decisionSinceWall = sinceWall
+    latched.forEach((l, i) => {
+      const state = this.condStates[i]
+      if (state !== undefined) state.latched = l
+    })
+    this.nextReassertAtMono = null
+    this.restoredUnconfirmed = true
   }
 
   private armReassert(mono: number): void {

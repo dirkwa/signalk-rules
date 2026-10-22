@@ -14,16 +14,45 @@ import type { Position } from './sun.js'
 const RULES_FILE = 'rules.json'
 const RUNTIME_FILE = 'runtime-state.json'
 
+export interface PersistedDecision {
+  decision: 'on' | 'off'
+  sinceWall: number
+  /** The actions and dry-run setting the decision was carried out with;
+   *  a rule changed in either starts over at 'unknown'. */
+  actionsKey: string
+  /** The conditions' hysteresis latches, kept for the same conditions. */
+  latched: boolean[]
+  conditionsKey: string
+}
+
 export interface RuntimeStateFile {
   pulses: PersistedPulse[]
   lastPulseAt: Record<string, number>
   lastPosition: Position | null
+  /** Committed decisions by rule id. */
+  decisions: Record<string, PersistedDecision>
 }
 
 const EMPTY_RUNTIME_STATE: RuntimeStateFile = {
   pulses: [],
   lastPulseAt: {},
-  lastPosition: null
+  lastPosition: null,
+  decisions: {}
+}
+
+function isPersistedDecision(value: unknown): value is PersistedDecision {
+  if (value === null || typeof value !== 'object') return false
+  const d = value as Partial<PersistedDecision>
+  return (
+    (d.decision === 'on' || d.decision === 'off') &&
+    typeof d.sinceWall === 'number' &&
+    // Also false for an infinite value, which JSON.parse makes of 1e999.
+    !Number.isNaN(new Date(d.sinceWall).getTime()) &&
+    typeof d.actionsKey === 'string' &&
+    Array.isArray(d.latched) &&
+    d.latched.every((l) => typeof l === 'boolean') &&
+    typeof d.conditionsKey === 'string'
+  )
 }
 
 /**
@@ -84,13 +113,22 @@ export class RulesStore {
         return EMPTY_RUNTIME_STATE
       }
       const p = parsed as Partial<RuntimeStateFile>
+      // A decision that does not read back whole is dropped, and its rule
+      // starts at 'unknown' as it did before decisions were kept.
+      const decisions: Record<string, PersistedDecision> = {}
+      if (p.decisions !== null && typeof p.decisions === 'object') {
+        for (const [id, d] of Object.entries(p.decisions)) {
+          if (isPersistedDecision(d)) decisions[id] = d
+        }
+      }
       return {
         pulses: Array.isArray(p.pulses) ? p.pulses : [],
         lastPulseAt:
           p.lastPulseAt !== null && typeof p.lastPulseAt === 'object'
             ? (p.lastPulseAt as Record<string, number>)
             : {},
-        lastPosition: p.lastPosition ?? null
+        lastPosition: p.lastPosition ?? null,
+        decisions
       }
     } catch {
       return EMPTY_RUNTIME_STATE
