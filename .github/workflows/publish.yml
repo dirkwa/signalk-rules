@@ -1,4 +1,4 @@
-# Publish to npm with OIDC-attested provenance on every `v*` tag push.
+# Publish to npm with OIDC-attested provenance for a `v*` tag.
 #
 # OIDC trust between this repo and npmjs replaces the long-lived
 # NPM_TOKEN secret — the workflow exchanges its short-lived OIDC token
@@ -6,7 +6,8 @@
 # must be >= 11 for the exchange to actually happen (older CLIs
 # silently fall back to anonymous publish, which 404s). Node 22 in
 # actions/setup-node@v7 currently ships npm 10.9.x, so we install
-# npm@^11 first.
+# npm@^11 first. npm binds the trust to this file's name, so it must
+# stay publish.yml.
 #
 # The package.json `repository.url` must match this repo's GitHub URL
 # verbatim or the OIDC attestation fails with HTTP 422.
@@ -14,17 +15,58 @@
 name: Publish to npm
 
 on:
+  # A hand-pushed pre-release tag. The tags release-please creates do not
+  # fire this: they are pushed with GITHUB_TOKEN, which starts no
+  # workflow, so release-please.yml dispatches this file on the tag.
   push:
     tags:
       - 'v*'
+  # That dispatch, and a manual re-run of a release whose tag already
+  # exists: run it from the Actions tab with the tag selected as the ref.
+  # Every job reads github.ref_name, so a dispatch against v1.2.3 behaves
+  # exactly like the push that created it.
+  workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write # OIDC
+permissions: {}
 
 jobs:
-  publish:
+  release:
+    # release-please creates the GitHub release for a real version, so only
+    # a hand-pushed pre-release tag needs one made here; running for every
+    # tag would collide with the release that already exists.
+    #
+    # A manual run can select any ref, including a branch. Everything here
+    # treats the ref as a released version, so a branch dispatch would cut a
+    # release called "master" and npm-publish that branch's contents. The
+    # tag guard keeps the manual trigger to re-running a release whose tag
+    # already exists.
+    #
+    # After publish, so a pre-release that failed its tests or the version
+    # check is not advertised on the Releases page without reaching npm.
+    needs: publish
+    if: ${{ github.ref_type == 'tag' && (contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.')) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    # This job holds `id-token: write`, so it carries its own tag guard
+    # rather than leaning on another job's condition to stay off a branch.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC
     steps:
       - uses: actions/checkout@v7
 
@@ -42,15 +84,19 @@ jobs:
       - name: Build + lint + test
         run: npm run build:all
 
-      # A tag can point at a version that was already published (e.g.
-      # the very first release goes out locally because npm trusted
-      # publishing can only be configured on an existing package).
-      # Make the tag push a green no-op in that case instead of a
-      # confusing red "cannot publish over" failure.
+      # A re-run of a release that already reached npm, or a version that
+      # went out by hand, is a green no-op instead of a confusing red
+      # "cannot publish over" failure.
       - name: Check whether this version is already on npm
         id: check
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          if [ "v$VERSION" != "$REF_NAME" ]; then
+            echo "::error::tag $REF_NAME does not match package.json version $VERSION"
+            exit 1
+          fi
           if npm view "signalk-rules@$VERSION" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "signalk-rules@$VERSION already on npm — skipping publish"
@@ -60,4 +106,13 @@ jobs:
 
       - name: Publish to npm with provenance
         if: steps.check.outputs.published == 'false'
-        run: npm publish --provenance --access public
+        run: |
+          if [[ "$REF_NAME" == *-beta.* ]] || [[ "$REF_NAME" == *-rc.* ]]; then
+            npm publish --provenance --access public --tag beta
+          else
+            npm publish --provenance --access public
+          fi
+        env:
+          # Passed through env, never interpolated into the script: a tag
+          # name is attacker-controllable.
+          REF_NAME: ${{ github.ref_name }}

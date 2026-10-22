@@ -110,9 +110,27 @@ as bus deltas because real switching confirms state on the bus.
   TypeScript 6 no longer auto-includes `node_modules/@types`.
 - **Every change goes through a PR** — never commit directly to
   `master`. Branch names use hyphens, never slashes.
-- **Version bumps live in their own `chore(release): X.Y.Z` PR** with
-  no code changes mixed in (CodeRabbit skips review on that title;
-  the tag push after merge triggers the npm publish workflow).
+- **release-please owns the version.** Never bump `package.json` by
+  hand. A push to `master` carrying a releasable commit updates a
+  standing `chore(release): X.Y.Z` PR (CodeRabbit skips that title);
+  merging it creates the tag and the GitHub Release, and
+  `release-please.yml` then dispatches `publish.yml` on the tag, since
+  a tag pushed with `GITHUB_TOKEN` starts no workflow and npm's
+  trusted publishing is bound to that file. Merging the release PR is
+  what publishes to npm, so it needs Dirk's explicit go.
+- **The PR title decides the release.** `feat` gives a minor, `fix`
+  and `perf` a patch, `!` or a `BREAKING CHANGE:` footer a major; a
+  `Release-As: X.Y.Z` footer overrides it. Only `feat`, `fix`,
+  `perf`, a revert, any breaking change, `build(deps)` and a
+  `Release-As:` footer propose a release; every other type proposes
+  none (the `gate` job in `release-please.yml`). `label-by-title.yml`
+  labels each PR from its title, and `.github/release.yml` groups the
+  notes by label.
+- **Pre-releases are tagged by hand.** Bump `package.json` to
+  `X.Y.Z-beta.N` (or `-rc.N`) on a branch that is never merged, and
+  push the tag `vX.Y.Z-beta.N` on that commit: `publish.yml` refuses a
+  tag that disagrees with `package.json`, publishes under the `beta`
+  dist-tag, and creates the GitHub pre-release.
 - Never auto-commit, never auto-push. No release work unless asked.
 - Comments explain WHY, not what. No AI attribution anywhere.
 - PRs: succinct, only tests actually performed. No checkboxes.
