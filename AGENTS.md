@@ -118,19 +118,13 @@ as bus deltas because real switching confirms state on the bus.
   a tag pushed with `GITHUB_TOKEN` starts no workflow and npm's
   trusted publishing is bound to that file. Merging the release PR is
   what publishes to npm, so it needs Dirk's explicit go.
-- **The PR title decides the release.** `feat` gives a minor, `fix`
-  and `perf` a patch, `!` or a `BREAKING CHANGE:` footer a major; a
-  `Release-As: X.Y.Z` footer overrides it. Only `feat`, `fix`,
-  `perf`, a revert, any breaking change, `build(deps)` and a
-  `Release-As:` footer propose a release; every other type proposes
-  none (the `gate` job in `release-please.yml`). `label-by-title.yml`
-  labels each PR from its title, and `.github/release.yml` groups the
-  notes by label.
-- **Pre-releases are tagged by hand.** Bump `package.json` to
-  `X.Y.Z-beta.N` (or `-rc.N`) on a branch that is never merged, and
-  push the tag `vX.Y.Z-beta.N` on that commit: `publish.yml` refuses a
-  tag that disagrees with `package.json`, publishes under the `beta`
-  dist-tag, and creates the GitHub pre-release.
+- **The PR title decides the release**, as a conventional commit:
+  its type sets whether a release is proposed and how big the bump
+  is, and `label-by-title.yml` labels the PR from it for the release
+  notes. The exact rules are the `gate` job in `release-please.yml`.
+- **Pre-releases are tagged by hand** on a branch that is never
+  merged, with `package.json` bumped to the pre-release version on
+  that branch; `publish.yml` handles the rest.
 - Never auto-commit, never auto-push. No release work unless asked.
 - Comments explain WHY, not what. No AI attribution anywhere.
 - PRs: succinct, only tests actually performed. No checkboxes.

@@ -12,25 +12,6 @@ on:
 
 permissions: {}
 
-# One release-please run at a time: a push and a manual run, or two pushes
-# landing close together, would each read the release pull request's state
-# and each write it, and the later write could undo the earlier one.
-# cancel-in-progress is false so a run already creating a tag or dispatching
-# the publish is never killed part-way. A run waiting behind it can still be
-# replaced by a newer one — the default queue holds a single pending run —
-# which costs nothing here: release-please derives the release pull request
-# from the commit range, so the newest run produces the same result the
-# superseded one would have.
-#
-# The group is a constant rather than keyed on github.ref: the action is
-# given no target-branch, so every run — including a dispatch launched from
-# some other branch — acts on the default branch's release pull request. A
-# ref-keyed group would put such a run in a group of its own and let it edit
-# that pull request alongside a master run.
-concurrency:
-  group: release-please
-  cancel-in-progress: false
-
 jobs:
   # GitHub's release notes are never empty, so release-please would propose
   # a release after every merge, a docs or ci change included. Only a push
@@ -55,7 +36,7 @@ jobs:
         env:
           DISPATCHED: ${{ github.event_name == 'workflow_dispatch' }}
           MESSAGES: ${{ toJSON(github.event.commits.*.message) }}
-          RELEASABLE: '^((feat|fix|perf|revert)(\([^)]*\))?!?: |[a-z]+(\([^)]*\))?!: |build\(deps\): |Revert |chore\(release\): v?[0-9])'
+          RELEASABLE: '^((feat|fix|perf|revert)(\([^)]*\))?!?: |[a-z]+(\([^)]*\))?!: |build\(deps\): |Revert |chore\(release\): v?[0-9]|chore(\([^)]*\))?: release v?[0-9])'
         run: |
           if [ "$DISPATCHED" = true ]; then
             echo "releasable=true" >> "$GITHUB_OUTPUT"
@@ -72,6 +53,27 @@ jobs:
   release-please:
     needs: gate
     if: ${{ needs.gate.outputs.releasable == 'true' }}
+    # One release-please run at a time: a push and a manual run, or two
+    # pushes landing close together, would each read the release pull
+    # request's state and each write it, and the later write could undo the
+    # earlier one. cancel-in-progress is false so a run already creating a
+    # tag is never killed part-way. A run waiting behind it can still be
+    # replaced by a newer one (the queue holds a single pending run), which
+    # costs nothing: release-please derives the release pull request from
+    # the commit range, so the newest run produces the same result.
+    #
+    # The group is on this job, not the workflow, because only a releasable
+    # push reaches it. At workflow level a docs push could replace the
+    # pending run of the release PR's merge, and its gate would then skip
+    # the run that creates the tag.
+    #
+    # The group is a constant rather than keyed on github.ref: the action is
+    # given no target-branch, so every run, a dispatch launched from some
+    # other branch included, acts on the default branch's release pull
+    # request.
+    concurrency:
+      group: release-please
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     permissions:
       contents: write
