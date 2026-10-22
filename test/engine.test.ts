@@ -66,7 +66,7 @@ interface HarnessOptions {
   dir?: string
   clock?: FakeClock
   /** Replaces the switching backend's reply, unless it returns undefined. */
-  reply?: () => Promise<unknown> | undefined
+  reply?: (path: string) => Promise<unknown> | undefined
 }
 
 function harness(
@@ -90,7 +90,7 @@ function harness(
     },
     put: async (p, value) => {
       puts.push({ path: p, value })
-      const replaced = opts.reply?.()
+      const replaced = opts.reply?.(p)
       if (replaced !== undefined) return replaced
       model[p] = value
       // Real switching echoes the new state back as a bus delta.
@@ -647,6 +647,71 @@ describe('Engine — decisions across a restart and a reload', () => {
     restart([genRule()])
     await flush()
     expect(states(h.deltas)).toEqual(['alert'])
+  })
+
+  it('saves a latch that moves without a transition, so a crash keeps it', async () => {
+    const DOOR = 'electrical.switches.bank.10.9.state'
+    const rule = waterHeaterRule({
+      conditions: [
+        {
+          type: 'numeric',
+          path: SOLAR,
+          operator: 'gt',
+          threshold: 4,
+          clearThreshold: 1
+        },
+        { type: 'switch', path: DOOR, equals: 1 }
+      ]
+    })
+    h = harness({ [HEATER]: 0, [SOLAR]: 0.5, [DOOR]: 0 })
+    h.engine.start(doc(rule))
+    await flush()
+    expect(h.engine.getState().rules[0]?.decision).toBe('off')
+
+    // The solar condition latches on while the other keeps the rule off.
+    h.push(SOLAR, 5)
+    h.push(SOLAR, 2)
+    await flush()
+
+    // A crash: no stop(), so only what was saved along the way survives.
+    const first = h
+    h = harness(first.model, { dir: first.dir, clock: first.clock })
+    h.model[DOOR] = 1
+    h.engine.start(doc(rule))
+    await flush()
+    expect(h.puts).toEqual([{ path: HEATER, value: 1 }])
+  })
+
+  it('never saves a decision ahead of a switch PUT listed after a pulse', async () => {
+    const SOC = 'electrical.batteries.60.capacity.stateOfCharge'
+    const STARTER = 'electrical.switches.bank.50.1.state'
+    const saved = vi.spyOn(RulesStore.prototype, 'saveRuntimeStateSync')
+    h = harness(
+      { [STARTER]: 0, [HEATER]: 0 },
+      {
+        // The switch PUT goes out but is never answered.
+        reply: (p) => (p === HEATER ? new Promise(() => undefined) : undefined)
+      }
+    )
+    h.engine.start(
+      doc(
+        waterHeaterRule({
+          conditions: [
+            { type: 'numeric', path: SOC, operator: 'lt', threshold: 0.25 }
+          ],
+          actions: [
+            { type: 'pulse', path: STARTER, seconds: 30 },
+            { type: 'setSwitch', path: HEATER }
+          ]
+        })
+      )
+    )
+    h.push(SOC, 0.2)
+    await flush()
+    expect(h.puts.map((p) => p.path)).toContain(HEATER)
+    const decisions = saved.mock.calls.map(([state]) => state.decisions)
+    expect(decisions.some((d) => RULE_ID in d)).toBe(false)
+    saved.mockRestore()
   })
 
   it('keeps the decision of an unchanged rule across a reload', async () => {

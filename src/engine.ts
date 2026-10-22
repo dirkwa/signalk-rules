@@ -365,9 +365,14 @@ export class Engine {
 
   private evaluateRule(t: TrackedRule): void {
     const ctx = this.evalContext()
+    let latchMoved = false
     const truths = t.rule.conditions.map((cond, i) => {
       const state = t.runtime.condStates[i]
-      return state !== undefined ? evalCondition(cond, state, ctx) : 'unknown'
+      if (state === undefined) return 'unknown'
+      const before = state.latched
+      const truth = evalCondition(cond, state, ctx)
+      latchMoved ||= state.latched !== before
+      return truth
     })
     t.lastTruths = truths
     const raw = combine(t.rule.combinator, truths)
@@ -379,11 +384,17 @@ export class Engine {
         t.failedTargets.clear()
         committed = true
       }
+      // Held unconfirmed while the actions go out: a pulse saves the runtime
+      // state before it fires, and that save must not record the decision
+      // ahead of a switch PUT listed after the pulse.
+      t.unconfirmedPuts++
       this.executeEffect(t, effect)
+      t.unconfirmedPuts--
     }
     // After the actions went out: a decision waiting on a PUT is written
-    // once the PUT is confirmed.
-    if (committed) this.persistRuntimeState()
+    // once the PUT is confirmed. A latch is written when it moves, so a
+    // crash cannot bring back one that no longer holds.
+    if (committed || latchMoved) this.persistRuntimeState()
   }
 
   private executeEffect(t: TrackedRule, effect: RuleEffect): void {
