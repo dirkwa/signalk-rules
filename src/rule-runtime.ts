@@ -90,6 +90,17 @@ export class RuleRuntime {
     return effects
   }
 
+  /**
+   * Take over a decision committed before a restart or reload, so that
+   * coming back is not a transition: a manual override made since stays.
+   * A reassert, if configured, runs from now as after a fresh commit.
+   */
+  restore(decision: 'on' | 'off', sinceWall: number): void {
+    this.decision = decision
+    this.decisionSinceWall = sinceWall
+    this.armReassert(this.clock.monoMs())
+  }
+
   private armReassert(mono: number): void {
     const minutes = this.rule.options.reassertMinutes
     this.nextReassertAtMono =

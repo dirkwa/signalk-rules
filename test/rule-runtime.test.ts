@@ -156,6 +156,19 @@ describe('RuleRuntime', () => {
     expect(rt.advance('unknown')).toEqual([])
   })
 
+  it('takes over a restored decision without an edge, reasserting from then', () => {
+    const clock = new FakeClock()
+    const rt = new RuleRuntime(rule({ reassertMinutes: 1 }), clock)
+    rt.restore('on', 1_600_000_000_000)
+    expect(rt.decision).toBe('on')
+    expect(rt.decisionSinceWall).toBe(1_600_000_000_000)
+
+    expect(rt.advance('true')).toEqual([])
+    clock.advance(60_000)
+    expect(rt.advance('true')).toEqual([{ kind: 'reassert' }])
+    expect(rt.advance('false')).toEqual([{ kind: 'edge', edge: 'falling' }])
+  })
+
   it('keeps only the last five action records', () => {
     const clock = new FakeClock()
     const rt = new RuleRuntime(rule(), clock)

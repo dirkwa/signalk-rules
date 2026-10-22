@@ -21,6 +21,11 @@ Classic use cases, each a one-minute setup:
   *changes*. Manual overrides (panel, plotter, another app) stick
   until the next transition. Rules that must stay enforced can opt
   into a per-rule *re-assert every N minutes*.
+- **Restart-proof.** A rule keeps its decision across a server
+  restart and across edits that leave its actions and dry-run setting
+  alone, so neither counts as a transition and a manual override
+  survives them. A rule that comes back *on* raises its notification
+  again, since the server does not keep it.
 - **Flap-proof.** Numeric conditions support a separate release
   threshold (hysteresis), and every rule can require its conditions to
   hold for N seconds before acting.

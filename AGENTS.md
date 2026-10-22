@@ -40,8 +40,9 @@ a sentence-style web UI. Two halves in one npm package:
 3. **Edge-triggered semantics.** Rules command only on decision
    *transitions*; manual overrides stick. `applySetSwitch` compares
    against the last observed actual value and skips the PUT when it
-   already agrees (this is also the startup baseline). Only the
-   opt-in reassert timer intentionally overrides manual changes.
+   already agrees (this is also the baseline of a rule that starts at
+   `unknown`). Only the opt-in reassert timer intentionally overrides
+   manual changes.
 4. **Unknown holds.** Missing/stale input ⇒ condition `unknown` ⇒
    Kleene combine ⇒ rule holds its committed decision and acts on
    nothing. Never let stale data flap an output.
@@ -68,6 +69,13 @@ a sentence-style web UI. Two halves in one npm package:
     `<path>.meta.displayName` to the SK server (persisted in
     baseDeltas.json server-side) — never keep names in local state
     only.
+11. **Decisions survive restarts and reloads.** `runtime-state.json`
+    keeps each rule's committed decision with the canonical JSON of
+    its actions and dry-run flag (`actionsKey`); a rule whose key
+    changed, or whose last PUT failed or is unconfirmed, starts at
+    `unknown` instead. A restored decision is no edge: no PUT and no
+    pulse, but notifications are raised again at start because the
+    server drops them on restart.
 
 ## REST API (`src/api.ts`)
 

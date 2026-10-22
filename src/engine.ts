@@ -22,10 +22,32 @@ import {
   type PutFn
 } from './actions.js'
 import { SunTracker } from './sun.js'
-import type { RulesStore } from './store.js'
+import type { PersistedDecision, RulesStore } from './store.js'
 
 const POSITION_PATH = 'navigation.position'
 const POSITION_SAVE_INTERVAL_MS = 10 * 60_000
+
+/** JSON with sorted keys, so the same actions saved in another key
+ *  order still match. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    const fields = Object.keys(obj)
+      .filter((k) => obj[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`)
+    return `{${fields.join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/** What a committed decision was carried out with. A decision is only
+ *  worth keeping for the same outputs, driven the same way: one made in
+ *  dry-run never reached them. */
+function actionsKey(rule: RuleT): string {
+  return canonical({ actions: rule.actions, dryRun: rule.dryRun })
+}
 
 export interface EngineClock {
   monoMs(): number
@@ -65,6 +87,12 @@ interface TrackedRule {
   rule: RuleT
   runtime: RuleRuntime
   lastTruths: Tri[]
+  /** PUTs not yet confirmed, and whether one for the committed decision
+   *  failed or was cut off by a stop. A decision is carried over only
+   *  while its outputs are known to match it; otherwise the rule
+   *  baselines against the actual state again. */
+  unconfirmedPuts: number
+  putFailed: boolean
 }
 
 export class Engine {
@@ -112,7 +140,19 @@ export class Engine {
     // mid-pulse. Revert before evaluating anything.
     this.pulses.restoreAndRevert(saved.pulses)
 
-    this.reload(doc)
+    const restoredOn = this.install(doc, saved.decisions)
+    // A server restart drops every notification, so a rule that comes
+    // back 'on' raises its own again. Switches keep their state, and a
+    // pulse already fired. One that turned off on its first evaluation
+    // has nothing to raise.
+    for (const t of restoredOn) {
+      if (t.runtime.decision !== 'on') continue
+      for (const action of t.rule.actions) {
+        if (action.type === 'notification') {
+          this.applyAction(t, action, 'rising')
+        }
+      }
+    }
 
     if (this.deps.scheduleTick !== false) {
       this.ticker = setInterval(
@@ -123,9 +163,19 @@ export class Engine {
     }
   }
 
-  /** Hot-swap the rule set. Runtimes restart at 'unknown' (safe: follow
-   *  edges baseline against actual state; pulses are cooldown-gated). */
+  /** Hot-swap the rule set. A rule keeps its committed decision when its
+   *  actions and dry-run setting are unchanged, as across a restart;
+   *  any other starts at 'unknown' (safe: follow edges baseline against
+   *  actual state; pulses are cooldown-gated). */
   reload(doc: RulesDocT): void {
+    this.install(doc, this.decisions())
+  }
+
+  /** Returns the rules that came back 'on'. */
+  private install(
+    doc: RulesDocT,
+    carried: Record<string, PersistedDecision>
+  ): TrackedRule[] {
     const nextById = new Map(doc.rules.map((r) => [r.id, r]))
 
     for (const [id, t] of this.tracked) {
@@ -144,19 +194,52 @@ export class Engine {
     }
 
     this.tracked.clear()
+    const restoredOn: TrackedRule[] = []
     for (const rule of doc.rules) {
       if (!rule.enabled) continue
-      this.tracked.set(rule.id, {
+      const t: TrackedRule = {
         rule,
         runtime: new RuleRuntime(rule, this.clock),
-        lastTruths: rule.conditions.map(() => 'unknown' as Tri)
-      })
+        lastTruths: rule.conditions.map(() => 'unknown' as Tri),
+        unconfirmedPuts: 0,
+        putFailed: false
+      }
+      const prior = Object.hasOwn(carried, rule.id)
+        ? carried[rule.id]
+        : undefined
+      if (prior !== undefined && prior.actionsKey === actionsKey(rule)) {
+        t.runtime.restore(prior.decision, prior.sinceWall)
+        if (prior.decision === 'on') restoredOn.push(t)
+      }
+      this.tracked.set(rule.id, t)
     }
     this.doc = doc
 
     this.rebuildSubscriptions()
     for (const t of this.tracked.values()) this.evaluateRule(t)
+    this.persistRuntimeState()
     this.updateStatus()
+    return restoredOn
+  }
+
+  /** Committed decisions worth carrying over, by rule id. */
+  private decisions(): Record<string, PersistedDecision> {
+    const out: Record<string, PersistedDecision> = {}
+    for (const [id, t] of this.tracked) {
+      if (
+        t.runtime.decision === 'unknown' ||
+        t.unconfirmedPuts > 0 ||
+        t.putFailed
+      ) {
+        continue
+      }
+      out[id] = {
+        decision: t.runtime.decision,
+        sinceWall: t.runtime.decisionSinceWall,
+        actionsKey: actionsKey(t.rule)
+      }
+    }
+    return out
   }
 
   stop(): void {
@@ -281,7 +364,17 @@ export class Engine {
     t.lastTruths = truths
     const raw = combine(t.rule.combinator, truths)
     const effects = t.runtime.advance(raw)
-    for (const effect of effects) this.executeEffect(t, effect)
+    let committed = false
+    for (const effect of effects) {
+      if (effect.kind === 'edge') {
+        t.putFailed = false
+        committed = true
+      }
+      this.executeEffect(t, effect)
+    }
+    // After the actions went out: a decision waiting on a PUT is written
+    // once the PUT is confirmed.
+    if (committed) this.persistRuntimeState()
   }
 
   private executeEffect(t: TrackedRule, effect: RuleEffect): void {
@@ -431,7 +524,9 @@ export class Engine {
       })
       return
     }
+    t.unconfirmedPuts++
     this.putExec.request(action.path, desired, (ok, detail) => {
+      t.unconfirmedPuts--
       t.runtime.recordAction({
         ts: this.clock.wallMs(),
         kind: 'put',
@@ -442,10 +537,14 @@ export class Engine {
       })
       if (ok) {
         t.runtime.error = null
-      } else if (detail !== 'superseded' && detail !== 'stopped') {
-        t.runtime.error = `PUT ${action.path} failed: ${detail ?? 'unknown error'}`
-        this.updateStatus()
+      } else if (detail !== 'superseded') {
+        t.putFailed = true
+        if (detail !== 'stopped') {
+          t.runtime.error = `PUT ${action.path} failed: ${detail ?? 'unknown error'}`
+          this.updateStatus()
+        }
       }
+      if (detail !== 'superseded') this.persistRuntimeState()
     })
   }
 
@@ -489,7 +588,8 @@ export class Engine {
     this.deps.store.saveRuntimeStateSync({
       pulses: this.pulses.snapshot(),
       lastPulseAt: this.pulses.lastPulses(),
-      lastPosition: this.sun.position
+      lastPosition: this.sun.position,
+      decisions: this.decisions()
     })
   }
 
