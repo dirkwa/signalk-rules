@@ -12,7 +12,13 @@ afterEach(() => {
 describe('RulesStore runtime state', () => {
   it('reads back only whole decisions', () => {
     dir = mkdtempSync(path.join(tmpdir(), 'sk-rules-store-'))
-    const kept = { decision: 'on', sinceWall: 1000, actionsKey: '{}' }
+    const kept = {
+      decision: 'on',
+      sinceWall: 1000,
+      actionsKey: '{}',
+      latched: [true],
+      conditionsKey: '{}'
+    }
     writeFileSync(
       path.join(dir, 'runtime-state.json'),
       JSON.stringify({
@@ -21,11 +27,17 @@ describe('RulesStore runtime state', () => {
         lastPosition: null,
         decisions: {
           'aaaaaaaa-0000': kept,
-          'bbbbbbbb-0000': { decision: 'maybe', sinceWall: 1, actionsKey: '' },
-          'cccccccc-0000': { decision: 'off', actionsKey: '' },
-          'dddddddd-0000': 5
+          'bbbbbbbb-0000': { ...kept, decision: 'maybe' },
+          'cccccccc-0000': { ...kept, sinceWall: undefined },
+          'dddddddd-0000': 5,
+          // Past the range a Date can hold.
+          'eeeeeeee-0000': { ...kept, sinceWall: 8.64e15 + 1 },
+          'ffffffff-0000': { ...kept, latched: [1] },
+          'gggggggg-0000': { ...kept, conditionsKey: undefined },
+          // JSON.parse reads 1e999 as Infinity.
+          'hhhhhhhh-0000': { ...kept, sinceWall: 7777 }
         }
-      })
+      }).replace('"sinceWall":7777', '"sinceWall":1e999')
     )
     expect(new RulesStore(dir).loadRuntimeState().decisions).toEqual({
       'aaaaaaaa-0000': kept

@@ -65,8 +65,8 @@ interface HarnessOptions {
   /** A previous harness's data dir and clock, to start the plugin again. */
   dir?: string
   clock?: FakeClock
-  /** Replaces the switching backend's reply. */
-  reply?: () => Promise<unknown>
+  /** Replaces the switching backend's reply, unless it returns undefined. */
+  reply?: () => Promise<unknown> | undefined
 }
 
 function harness(
@@ -90,7 +90,8 @@ function harness(
     },
     put: async (p, value) => {
       puts.push({ path: p, value })
-      if (opts.reply !== undefined) return opts.reply()
+      const replaced = opts.reply?.()
+      if (replaced !== undefined) return replaced
       model[p] = value
       // Real switching echoes the new state back as a bus delta.
       subs.get(p)?.(value)
@@ -488,6 +489,46 @@ describe('Engine — decisions across a restart and a reload', () => {
     expect(h.engine.getState().rules[0]?.decision).toBe('off')
   })
 
+  it('keeps a latched condition across a restart', async () => {
+    h = harness({ [HEATER]: 0 })
+    h.engine.start(doc(waterHeaterRule()))
+    h.push(SOLAR, 5)
+    await flush()
+    // Between the clear threshold (1) and the trigger (4): still latched on.
+    h.push(SOLAR, 2)
+    await flush()
+
+    restart([waterHeaterRule()])
+    await flush()
+    expect(h.puts).toEqual([])
+    expect(h.engine.getState().rules[0]?.decision).toBe('on')
+  })
+
+  it('evaluates changed conditions afresh', async () => {
+    h = harness({ [HEATER]: 0 })
+    h.engine.start(doc(waterHeaterRule()))
+    h.push(SOLAR, 5)
+    await flush()
+    h.push(SOLAR, 2)
+    await flush()
+
+    const stricter = waterHeaterRule({
+      conditions: [
+        {
+          type: 'numeric',
+          path: SOLAR,
+          operator: 'gt',
+          threshold: 3,
+          clearThreshold: 1
+        }
+      ]
+    })
+    restart([stricter])
+    await flush()
+    // The latch was for other thresholds: 2 is below this trigger.
+    expect(h.puts).toEqual([{ path: HEATER, value: 0 }])
+  })
+
   it('starts over when going live, since a dry-run decision never reached the switch', async () => {
     h = harness({ [HEATER]: 0 })
     h.engine.start(doc(waterHeaterRule({ dryRun: true })))
@@ -529,6 +570,43 @@ describe('Engine — decisions across a restart and a reload', () => {
     restart([waterHeaterRule()], { reply: undefined })
     await flush()
     expect(h.puts).toEqual([{ path: HEATER, value: 1 }])
+  })
+
+  it('keeps a decision again once a failed reassert is followed by one that went through', async () => {
+    let failing = false
+    h = harness(
+      { [HEATER]: 0 },
+      {
+        reply: () =>
+          failing ? Promise.reject(new Error('bus down')) : undefined
+      }
+    )
+    h.engine.start(doc(waterHeaterRule({ options: { reassertMinutes: 1 } })))
+    h.push(SOLAR, 5)
+    await flush()
+    expect(h.puts).toHaveLength(1)
+
+    failing = true
+    h.push(HEATER, 0)
+    h.clock.advance(61_000)
+    h.engine.tick()
+    h.clock.advance(5100)
+    await vi.advanceTimersByTimeAsync(5100) // the reassert and its retry
+    expect(h.puts).toHaveLength(3)
+
+    failing = false
+    h.clock.advance(61_000)
+    h.engine.tick()
+    await flush()
+    expect(h.puts).toHaveLength(4)
+    expect(h.model[HEATER]).toBe(1)
+
+    h.push(HEATER, 0)
+    restart([waterHeaterRule({ options: { reassertMinutes: 1 } })], {
+      reply: undefined
+    })
+    await flush()
+    expect(h.puts).toEqual([])
   })
 
   it('does not keep a decision whose PUT was unanswered at the stop', async () => {

@@ -71,11 +71,13 @@ a sentence-style web UI. Two halves in one npm package:
     only.
 11. **Decisions survive restarts and reloads.** `runtime-state.json`
     keeps each rule's committed decision with the canonical JSON of
-    its actions and dry-run flag (`actionsKey`); a rule whose key
-    changed, or whose last PUT failed or is unconfirmed, starts at
-    `unknown` instead. A restored decision is no edge: no PUT and no
-    pulse, but notifications are raised again at start because the
-    server drops them on restart.
+    its actions and dry-run flag (`actionsKey`), and its conditions'
+    hysteresis latches for the same conditions (`conditionsKey`); a
+    rule whose `actionsKey` changed, or with a PUT that failed or is
+    unconfirmed, starts at `unknown` instead. A restored decision is
+    no edge: no PUT and no pulse, and its reassert waits for known
+    input that agrees. Notifications are raised again at start
+    because the server drops them on restart.
 
 ## REST API (`src/api.ts`)
 

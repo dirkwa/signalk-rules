@@ -156,17 +156,30 @@ describe('RuleRuntime', () => {
     expect(rt.advance('unknown')).toEqual([])
   })
 
-  it('takes over a restored decision without an edge, reasserting from then', () => {
+  it('takes over a restored decision without an edge', () => {
     const clock = new FakeClock()
-    const rt = new RuleRuntime(rule({ reassertMinutes: 1 }), clock)
-    rt.restore('on', 1_600_000_000_000)
+    const rt = new RuleRuntime(rule(), clock)
+    rt.restore('on', 1_600_000_000_000, [true])
     expect(rt.decision).toBe('on')
     expect(rt.decisionSinceWall).toBe(1_600_000_000_000)
+    expect(rt.condStates[0]?.latched).toBe(true)
+
+    expect(rt.advance('true')).toEqual([])
+    expect(rt.advance('false')).toEqual([{ kind: 'edge', edge: 'falling' }])
+  })
+
+  it('reasserts a restored decision only once known input agrees with it', () => {
+    const clock = new FakeClock()
+    const rt = new RuleRuntime(rule({ reassertMinutes: 1 }), clock)
+    rt.restore('on', 1_600_000_000_000, [])
+
+    clock.advance(600_000)
+    expect(rt.advance('unknown')).toEqual([])
+    expect(rt.nextReassertRemainingMs()).toBe(null)
 
     expect(rt.advance('true')).toEqual([])
     clock.advance(60_000)
-    expect(rt.advance('true')).toEqual([{ kind: 'reassert' }])
-    expect(rt.advance('false')).toEqual([{ kind: 'edge', edge: 'falling' }])
+    expect(rt.advance('unknown')).toEqual([{ kind: 'reassert' }])
   })
 
   it('keeps only the last five action records', () => {

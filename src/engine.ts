@@ -49,6 +49,10 @@ function actionsKey(rule: RuleT): string {
   return canonical({ actions: rule.actions, dryRun: rule.dryRun })
 }
 
+function conditionsKey(rule: RuleT): string {
+  return canonical({ combinator: rule.combinator, conditions: rule.conditions })
+}
+
 export interface EngineClock {
   monoMs(): number
   wallMs(): number
@@ -87,12 +91,12 @@ interface TrackedRule {
   rule: RuleT
   runtime: RuleRuntime
   lastTruths: Tri[]
-  /** PUTs not yet confirmed, and whether one for the committed decision
-   *  failed or was cut off by a stop. A decision is carried over only
-   *  while its outputs are known to match it; otherwise the rule
-   *  baselines against the actual state again. */
+  /** PUTs not yet confirmed, and the targets whose last PUT for the
+   *  committed decision failed or was cut off by a stop. A decision is
+   *  carried over only while its outputs are known to match it;
+   *  otherwise the rule baselines against the actual state again. */
   unconfirmedPuts: number
-  putFailed: boolean
+  failedTargets: Set<string>
 }
 
 export class Engine {
@@ -202,13 +206,15 @@ export class Engine {
         runtime: new RuleRuntime(rule, this.clock),
         lastTruths: rule.conditions.map(() => 'unknown' as Tri),
         unconfirmedPuts: 0,
-        putFailed: false
+        failedTargets: new Set()
       }
       const prior = Object.hasOwn(carried, rule.id)
         ? carried[rule.id]
         : undefined
       if (prior !== undefined && prior.actionsKey === actionsKey(rule)) {
-        t.runtime.restore(prior.decision, prior.sinceWall)
+        const latched =
+          prior.conditionsKey === conditionsKey(rule) ? prior.latched : []
+        t.runtime.restore(prior.decision, prior.sinceWall, latched)
         if (prior.decision === 'on') restoredOn.push(t)
       }
       this.tracked.set(rule.id, t)
@@ -229,14 +235,16 @@ export class Engine {
       if (
         t.runtime.decision === 'unknown' ||
         t.unconfirmedPuts > 0 ||
-        t.putFailed
+        t.failedTargets.size > 0
       ) {
         continue
       }
       out[id] = {
         decision: t.runtime.decision,
         sinceWall: t.runtime.decisionSinceWall,
-        actionsKey: actionsKey(t.rule)
+        actionsKey: actionsKey(t.rule),
+        latched: t.runtime.condStates.map((c) => c.latched),
+        conditionsKey: conditionsKey(t.rule)
       }
     }
     return out
@@ -367,7 +375,8 @@ export class Engine {
     let committed = false
     for (const effect of effects) {
       if (effect.kind === 'edge') {
-        t.putFailed = false
+        // A new decision; its own PUTs go out for every target below.
+        t.failedTargets.clear()
         committed = true
       }
       this.executeEffect(t, effect)
@@ -537,8 +546,9 @@ export class Engine {
       })
       if (ok) {
         t.runtime.error = null
+        t.failedTargets.delete(action.path)
       } else if (detail !== 'superseded') {
-        t.putFailed = true
+        t.failedTargets.add(action.path)
         if (detail !== 'stopped') {
           t.runtime.error = `PUT ${action.path} failed: ${detail ?? 'unknown error'}`
           this.updateStatus()

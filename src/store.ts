@@ -20,6 +20,9 @@ export interface PersistedDecision {
   /** The actions and dry-run setting the decision was carried out with;
    *  a rule changed in either starts over at 'unknown'. */
   actionsKey: string
+  /** The conditions' hysteresis latches, kept for the same conditions. */
+  latched: boolean[]
+  conditionsKey: string
 }
 
 export interface RuntimeStateFile {
@@ -43,7 +46,12 @@ function isPersistedDecision(value: unknown): value is PersistedDecision {
   return (
     (d.decision === 'on' || d.decision === 'off') &&
     typeof d.sinceWall === 'number' &&
-    typeof d.actionsKey === 'string'
+    // Also false for an infinite value, which JSON.parse makes of 1e999.
+    !Number.isNaN(new Date(d.sinceWall).getTime()) &&
+    typeof d.actionsKey === 'string' &&
+    Array.isArray(d.latched) &&
+    d.latched.every((l) => typeof l === 'boolean') &&
+    typeof d.conditionsKey === 'string'
   )
 }
 
