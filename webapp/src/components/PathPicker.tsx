@@ -1,29 +1,20 @@
 import { useMemo, useState } from 'react'
 import { useMetaStore, type PathInfo } from '../stores/metaStore'
 import { formatValue } from '../unitConvert'
+import {
+  freeEntryPath,
+  hasChildren,
+  matchesKind,
+  type PickerKind
+} from '../pathCatalog'
 
-export type PickerKind = 'switch' | 'numeric' | 'string' | 'any'
+export type { PickerKind }
 
 interface PathPickerProps {
   kind: PickerKind
   current: string
   onSelect(path: string): void
   onClose(): void
-}
-
-const SWITCH_RE = /^electrical\.switches\..*\.state$/
-
-function matchesKind(info: PathInfo, kind: PickerKind): boolean {
-  switch (kind) {
-    case 'switch':
-      return SWITCH_RE.test(info.path)
-    case 'numeric':
-      return info.lastValueKind === 'number' && !SWITCH_RE.test(info.path)
-    case 'string':
-      return info.lastValueKind === 'string'
-    case 'any':
-      return true
-  }
 }
 
 /** Pinned to the top of the string picker — the classic condition input. */
@@ -58,7 +49,12 @@ export function PathPicker({
           info.path.toLowerCase().includes(q) ||
           (info.displayName?.toLowerCase().includes(q) ?? false)
       )
+    const exact = query.trim()
     all.sort((a, b) => {
+      // An exact match must survive the row cap below.
+      const aExact = a.path === exact ? 0 : 1
+      const bExact = b.path === exact ? 0 : 1
+      if (aExact !== bExact) return aExact - bExact
       const aPin = STRING_SUGGESTIONS.includes(a.path) ? 0 : 1
       const bPin = STRING_SUGGESTIONS.includes(b.path) ? 0 : 1
       if (aPin !== bPin) return aPin - bPin
@@ -69,6 +65,11 @@ export function PathPicker({
     })
     return all.slice(0, 400)
   }, [paths, kind, query])
+
+  const freePath = useMemo(
+    () => freeEntryPath(query, kind, paths),
+    [query, kind, paths]
+  )
 
   const startRename = (info: PathInfo): void => {
     setEditing(info.path)
@@ -104,9 +105,33 @@ export function PathPicker({
           <div className="banner banner-error">{renameError}</div>
         )}
         <div className="picker-list">
-          {rows.length === 0 && (
+          {freePath !== null && (
+            <div
+              className={`picker-row ${freePath === current ? 'picker-row-current' : ''}`}
+            >
+              <button
+                type="button"
+                className="picker-row-main"
+                onClick={() => {
+                  onSelect(freePath)
+                  onClose()
+                }}
+              >
+                <span className="picker-name picker-name-raw">{freePath}</span>
+                <span className="picker-hint">
+                  {paths[freePath] !== undefined
+                    ? 'no value seen yet — use this path anyway'
+                    : hasChildren(freePath, paths)
+                      ? 'has sub-paths but no value of its own — use it anyway'
+                      : 'not seen on this vessel yet — use this path anyway'}
+                </span>
+              </button>
+            </div>
+          )}
+          {rows.length === 0 && freePath === null && (
             <div className="picker-empty">
-              No matching paths seen on this vessel yet.
+              No matching paths seen on this vessel yet. Type a full path to use
+              one that has not appeared.
             </div>
           )}
           {rows.map((info) => (

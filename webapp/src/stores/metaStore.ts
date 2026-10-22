@@ -5,8 +5,9 @@ import {
   fetchSelfSnapshot,
   putDisplayName
 } from '../api'
+import { snapshotPaths, type ValueKind } from '../pathCatalog'
 
-export type ValueKind = 'number' | 'string' | 'boolean' | 'object' | 'unknown'
+export type { ValueKind }
 
 export interface PathInfo {
   path: string
@@ -27,34 +28,6 @@ interface MetaState {
   label(path: string): string
 }
 
-function walkSnapshot(
-  node: unknown,
-  prefix: string,
-  out: Map<string, { kind: ValueKind; value: unknown }>
-): void {
-  if (node === null || typeof node !== 'object') return
-  const obj = node as Record<string, unknown>
-  if ('value' in obj && 'timestamp' in obj) {
-    const value = obj['value']
-    const kind: ValueKind =
-      typeof value === 'number'
-        ? 'number'
-        : typeof value === 'string'
-          ? 'string'
-          : typeof value === 'boolean'
-            ? 'boolean'
-            : value !== null && typeof value === 'object'
-              ? 'object'
-              : 'unknown'
-    out.set(prefix, { kind, value })
-    return
-  }
-  for (const [key, child] of Object.entries(obj)) {
-    if (key === 'meta' || key === 'timestamp' || key === '$source') continue
-    walkSnapshot(child, prefix === '' ? key : `${prefix}.${key}`, out)
-  }
-}
-
 export const useMetaStore = create<MetaState>()((set, get) => ({
   paths: {},
   loaded: false,
@@ -69,22 +42,7 @@ export const useMetaStore = create<MetaState>()((set, get) => ({
         fetchAvailablePaths().catch(() => [] as string[]),
         fetchSelfSnapshot().catch(() => null)
       ])
-      const kinds = new Map<string, { kind: ValueKind; value: unknown }>()
-      if (snapshot !== null) {
-        for (const [key, child] of Object.entries(
-          snapshot as Record<string, unknown>
-        )) {
-          if (
-            key === 'uuid' ||
-            key === 'mmsi' ||
-            key === 'name' ||
-            key === 'meta'
-          ) {
-            continue
-          }
-          walkSnapshot(child, key, kinds)
-        }
-      }
+      const kinds = snapshotPaths(snapshot)
       const paths: Record<string, PathInfo> = {}
       const add = (path: string): void => {
         if (path === '' || path.startsWith('notifications.')) return
