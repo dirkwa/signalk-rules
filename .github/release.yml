@@ -1,15 +1,23 @@
-# Auto-generated release notes (SignalK plugin release-notes convention)
 changelog:
   exclude:
     labels:
-      - dependencies
+      - skip-changelog
+      # release-please's own release PR, merged right before each tag —
+      # it would otherwise list itself.
+      - 'autorelease: pending'
+      - 'autorelease: tagged'
   categories:
-    - title: New features
+    - title: 🚀 Features
       labels:
+        - feature
         - enhancement
-    - title: Fixes
+    - title: 🐛 Fixes
       labels:
         - bug
-    - title: Other changes
+        - fix
+    - title: 📦 Dependencies
+      labels:
+        - dependencies
+    - title: Other
       labels:
         - '*'

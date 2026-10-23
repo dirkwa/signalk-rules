@@ -171,9 +171,8 @@ reviews:
         - One logical change per commit and per PR.
         - **No AI attribution** in commits, PR bodies, or code. No
           `Co-Authored-By` trailers.
-        - **No version bumps** in feature/fix PRs. Versions are bumped
-          only in dedicated `chore(release):` PRs when explicitly
-          requested.
+        - **No version bumps** in any hand-written PR. release-please
+          bumps the version in its own `chore(release):` PR.
         - PR descriptions: no checkboxes. "Tested" lists what actually
           ran.
 
