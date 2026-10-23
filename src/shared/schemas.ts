@@ -11,8 +11,10 @@
  */
 import { Type, type Static } from 'typebox'
 
+export const SK_PATH_PATTERN = '^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+$'
+
 export const SkPath = Type.String({
-  pattern: '^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+$',
+  pattern: SK_PATH_PATTERN,
   description: 'Dotted Signal K self path'
 })
 
