@@ -4,6 +4,7 @@ import type { ValidationIssue } from '../../../src/shared/validate'
 import { useRulesStore } from '../stores/rulesStore'
 import { useRuleEngineState } from '../stores/liveStore'
 import { ConditionRow } from '../components/ConditionRow'
+import { conditionPaths } from '../../../src/shared/message'
 import { ActionRow } from '../components/ActionRow'
 import { Switch } from '../components/Switch'
 
@@ -75,6 +76,7 @@ export function RuleEditorPage({ ruleId, onBack }: RuleEditorPageProps) {
   const ruleIssues = [...errors, ...warnings].filter((i) => i.ruleId === ruleId)
   const hasSetSwitch = rule.actions.some((a) => a.type === 'setSwitch')
   const hasPulse = rule.actions.some((a) => a.type === 'pulse')
+  const valuePaths = conditionPaths(rule.conditions)
 
   return (
     <div className="page editor">
@@ -211,6 +213,7 @@ export function RuleEditorPage({ ruleId, onBack }: RuleEditorPageProps) {
             showAdvanced={showAdvanced}
             canRemove={rule.actions.length > 1}
             errorFields={actionErrors.get(i) ?? new Set()}
+            valuePaths={valuePaths}
             onChange={(next) =>
               up({ actions: rule.actions.map((a, j) => (j === i ? next : a)) })
             }

@@ -67,6 +67,8 @@ interface HarnessOptions {
   clock?: FakeClock
   /** Replaces the switching backend's reply, unless it returns undefined. */
   reply?: (path: string) => Promise<unknown> | undefined
+  /** Metadata units by path. */
+  units?: Record<string, string>
 }
 
 function harness(
@@ -98,6 +100,7 @@ function harness(
       return { state: 'COMPLETED', statusCode: 200 }
     },
     sendDelta: (d) => deltas.push(d),
+    getUnits: (p) => opts.units?.[p],
     setStatus: () => undefined,
     setError: () => undefined,
     debug: () => undefined,
@@ -728,5 +731,149 @@ describe('Engine — decisions across a restart and a reload', () => {
     expect(h.puts).toHaveLength(1)
     expect(h.engine.getState().rules[0]?.decision).toBe('on')
     expect(h.engine.getState().rules[0]?.id).toBe(RULE_ID)
+  })
+})
+
+describe('Engine — values in a notification message', () => {
+  const FRIDGE = 'environment.inside.refrigerator.temperature'
+  const OUTAGE = 'network.providers.starlink.outage.duration'
+
+  const fridgeRule = (over: Partial<RuleT> = {}): RuleT => ({
+    id: 'dddddddd-1111-2222-3333-444444444444',
+    name: 'Fridge warm',
+    enabled: true,
+    dryRun: false,
+    combinator: 'all',
+    conditions: [
+      { type: 'numeric', path: FRIDGE, operator: 'gt', threshold: 284.15 }
+    ],
+    actions: [
+      {
+        type: 'notification',
+        pathSuffix: 'fridge.warm',
+        state: 'warn',
+        method: ['visual'],
+        message: 'Fridge at {' + FRIDGE + '}'
+      }
+    ],
+    options: {},
+    ...over
+  })
+
+  type NotificationDelta = {
+    updates: Array<{
+      values: Array<{ value: { state: string; message: string } }>
+    }>
+  }
+  const sent = (i: number): { state: string; message: string } | undefined =>
+    (h.deltas[i] as NotificationDelta | undefined)?.updates[0]?.values[0]?.value
+
+  it('fills a placeholder in display units on the rising edge', async () => {
+    h = harness({}, { units: { [FRIDGE]: 'K' } })
+    h.engine.start(doc(fridgeRule()))
+    h.push(FRIDGE, 285.35)
+    await flush()
+    expect(sent(0)).toMatchObject({
+      state: 'warn',
+      message: 'Fridge at 12.2 °C'
+    })
+  })
+
+  it('clears with the text it was raised with', async () => {
+    h = harness({}, { units: { [FRIDGE]: 'K' } })
+    h.engine.start(doc(fridgeRule()))
+    h.push(FRIDGE, 285.35)
+    await flush()
+    h.push(FRIDGE, 290.15)
+    await flush()
+    expect(h.deltas).toHaveLength(1) // still on: no second raise
+    h.push(FRIDGE, 280.15)
+    await flush()
+    expect(sent(1)).toMatchObject({
+      state: 'normal',
+      message: 'Fridge at 12.2 °C'
+    })
+  })
+
+  it('keeps the raised text when a reload pauses the rule', async () => {
+    h = harness({}, { units: { [FRIDGE]: 'K' } })
+    const rule = fridgeRule()
+    h.engine.start(doc(rule))
+    h.push(FRIDGE, 285.35)
+    await flush()
+    h.engine.reload(doc({ ...rule, name: 'Renamed' }))
+    h.engine.reload(doc({ ...rule, enabled: false }))
+    await flush()
+    expect(sent(h.deltas.length - 1)).toMatchObject({
+      state: 'normal',
+      message: 'Fridge at 12.2 °C'
+    })
+  })
+
+  it('renders a value that goes stale while held as ?', async () => {
+    h = harness()
+    const rule = fridgeRule({
+      conditions: [
+        {
+          type: 'numeric',
+          path: OUTAGE,
+          operator: 'gt',
+          threshold: 30,
+          staleSeconds: 60
+        },
+        { type: 'string', path: 'navigation.state', equals: 'anchored' }
+      ],
+      combinator: 'any',
+      actions: [
+        {
+          type: 'notification',
+          pathSuffix: 'starlink.restored',
+          state: 'alert',
+          method: ['visual'],
+          message: 'Restored after {' + OUTAGE + '} s ({navigation.state})'
+        }
+      ]
+    })
+    h.engine.start(doc(rule))
+    h.push(OUTAGE, 95)
+    await flush()
+    expect(sent(0)?.message).toBe('Restored after 95 s (?)')
+
+    h.push(OUTAGE, 0)
+    h.push('navigation.state', 'moored')
+    await flush()
+    expect(sent(1)?.state).toBe('normal')
+    h.clock.advance(120_000)
+    h.push('navigation.state', 'anchored')
+    await flush()
+    // The outage reading is two minutes old against a 60 s limit.
+    expect(sent(2)?.message).toBe('Restored after ? s (anchored)')
+  })
+
+  it('leaves braces alone unless a condition reads the path', async () => {
+    h = harness()
+    const rule = fridgeRule()
+    const action = rule.actions[0]
+    if (action?.type !== 'notification') throw new Error('fixture')
+    action.message = 'Fridge {warm} {} {electrical.batteries.house.voltage}'
+    h.engine.start(doc(rule))
+    h.push(FRIDGE, 290)
+    await flush()
+    expect(sent(0)?.message).toBe(
+      'Fridge {warm} {} {electrical.batteries.house.voltage}'
+    )
+  })
+
+  it('shows the filled message in a dry run and in a test', async () => {
+    h = harness()
+    h.engine.start(doc(fridgeRule({ dryRun: true })))
+    h.push(FRIDGE, 290)
+    await flush()
+    expect(h.deltas).toHaveLength(0)
+    const actions = h.engine.getState().rules[0]?.lastActions ?? []
+    expect(actions.at(-1)?.detail).toBe('would notify: Fridge at 290')
+    expect(
+      h.engine.testRule('dddddddd-1111-2222-3333-444444444444')?.wouldDo
+    ).toEqual(['raise notifications.fridge.warm (warn): Fridge at 290'])
   })
 })

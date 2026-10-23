@@ -10,6 +10,7 @@ import {
   type RuleT,
   type RulesDocT
 } from './schemas.js'
+import { conditionPaths, placeholderPaths } from './message.js'
 
 export interface ValidationIssue {
   /** JSON pointer into the document, e.g. "/rules/0/name". */
@@ -67,6 +68,24 @@ export function validateRulesDoc(input: unknown): ValidationResult {
           message
         )
       )
+    })
+
+    // A placeholder reads only what the rule already subscribes to.
+    // Any other one stays text, and only warns: a message saved before
+    // placeholders existed may hold braces that look like a path, and
+    // an error would refuse the whole rules file on upgrade.
+    const condPaths = new Set(conditionPaths(rule.conditions))
+    rule.actions.forEach((action, ai) => {
+      if (action.type !== 'notification') return
+      for (const path of placeholderPaths(action.message)) {
+        if (!condPaths.has(path)) {
+          issue(
+            warnings,
+            `/actions/${ai}/message`,
+            `{${path}} is not read by a condition of this rule, so it stays as written`
+          )
+        }
+      }
     })
 
     const hasSetSwitch = rule.actions.some((a) => a.type === 'setSwitch')
