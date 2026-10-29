@@ -88,30 +88,6 @@ export function validateRulesDoc(input: unknown): ValidationResult {
       }
     })
 
-    // A rule that reacts to its own notification keeps itself raised,
-    // or, negated, raises and clears it in a loop.
-    const raises = new Set(
-      rule.actions.flatMap((a) =>
-        a.type === 'notification' ? [`notifications.${a.pathSuffix}`] : []
-      )
-    )
-    rule.conditions.forEach((cond, ci) => {
-      if (cond.type !== 'notification' || !raises.has(cond.path)) return
-      if (cond.negate === true) {
-        issue(
-          errors,
-          `/conditions/${ci}/path`,
-          'this rule raises the notification it reacts to, and the inverted condition would raise and clear it in a loop'
-        )
-      } else {
-        issue(
-          warnings,
-          `/conditions/${ci}/path`,
-          'this rule raises the notification it reacts to, so it can hold itself on'
-        )
-      }
-    })
-
     const hasSetSwitch = rule.actions.some((a) => a.type === 'setSwitch')
     const hasPulse = rule.actions.some((a) => a.type === 'pulse')
     if (rule.options.reassertMinutes !== undefined && !hasSetSwitch) {
@@ -129,6 +105,8 @@ export function validateRulesDoc(input: unknown): ValidationResult {
       )
     }
   })
+
+  checkNotificationLoops(doc.rules, errors, warnings)
 
   // A switch driven by more than one enabled rule will fight.
   const targets = new Map<string, RuleT[]>()
@@ -155,6 +133,88 @@ export function validateRulesDoc(input: unknown): ValidationResult {
 
   if (errors.length > 0) return { ok: false, errors, warnings }
   return { ok: true, doc, warnings }
+}
+
+interface NotificationEdge {
+  to: string
+  /** The condition is inverted, so the raise follows a clear. */
+  inverted: boolean
+}
+
+/**
+ * A notification condition makes its rule raise the rule's own
+ * notifications, so rules chain notifications into a graph. A cycle in
+ * it feeds back: with an odd number of inverted conditions on the way,
+ * a raise leads to its own clear and the rules flip in a loop; with an
+ * even number they can hold each other raised.
+ */
+function checkNotificationLoops(
+  rules: readonly RuleT[],
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[]
+): void {
+  const edges = new Map<string, NotificationEdge[]>()
+  for (const rule of rules) {
+    const raises = rule.actions.flatMap((a) =>
+      a.type === 'notification' ? [`notifications.${a.pathSuffix}`] : []
+    )
+    for (const cond of rule.conditions) {
+      if (cond.type !== 'notification') continue
+      const list = edges.get(cond.path) ?? []
+      for (const to of raises) list.push({ to, inverted: cond.negate === true })
+      edges.set(cond.path, list)
+    }
+  }
+
+  rules.forEach((rule, ri) => {
+    rule.conditions.forEach((cond, ci) => {
+      if (cond.type !== 'notification') return
+      const loop = loopThrough(cond.path, edges)
+      if (loop === null) return
+      const issue = {
+        path: `/rules/${ri}/conditions/${ci}/path`,
+        ruleId: rule.id
+      }
+      if (loop === 'odd') {
+        errors.push({
+          ...issue,
+          message: `${cond.path} feeds back into itself through the notifications rules raise, and an inverted condition on the way would raise and clear it in a loop`
+        })
+      } else {
+        warnings.push({
+          ...issue,
+          message: `${cond.path} feeds back into itself through the notifications rules raise, so it can hold itself raised`
+        })
+      }
+    })
+  })
+}
+
+/** Whether a path reaches itself again, and through an odd number of
+ *  inverted conditions if it can. */
+function loopThrough(
+  start: string,
+  edges: ReadonlyMap<string, readonly NotificationEdge[]>
+): 'odd' | 'even' | null {
+  const seen = new Set<string>()
+  const queue: Array<{ path: string; odd: boolean }> = [
+    { path: start, odd: false }
+  ]
+  let even = false
+  for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+    for (const edge of edges.get(next.path) ?? []) {
+      const odd = next.odd !== edge.inverted
+      if (edge.to === start) {
+        if (odd) return 'odd'
+        even = true
+      }
+      const key = `${odd ? 1 : 0}${edge.to}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      queue.push({ path: edge.to, odd })
+    }
+  }
+  return even ? 'even' : null
 }
 
 function checkCondition(

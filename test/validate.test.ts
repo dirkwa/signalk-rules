@@ -326,6 +326,73 @@ describe('validateRulesDoc', () => {
       ])
     })
 
+    const chain = (
+      id: string,
+      watches: string,
+      raises: string,
+      negate?: true
+    ): RuleT =>
+      baseRule({
+        id,
+        conditions: [
+          {
+            type: 'notification',
+            path: `notifications.${watches}`,
+            atLeast: 'alert',
+            negate
+          }
+        ],
+        actions: [
+          {
+            type: 'notification',
+            pathSuffix: raises,
+            state: 'alert',
+            method: ['visual'],
+            message: raises
+          }
+        ]
+      })
+
+    it('rejects a loop across rules with an inverted condition', () => {
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
+          chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b')
+        )
+      )
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.errors.map((e) => e.path)).toEqual([
+        '/rules/0/conditions/0/path',
+        '/rules/1/conditions/0/path'
+      ])
+    })
+
+    it('warns about a loop across rules that can hold itself raised', () => {
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a'),
+          chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b')
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings.map((w) => w.path)).toEqual([
+        '/rules/0/conditions/0/path',
+        '/rules/1/conditions/0/path'
+      ])
+    })
+
+    it('accepts a chain that does not come back', () => {
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
+          chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'c')
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([])
+    })
+
     it('rejects a path outside notifications', () => {
       const r = validateRulesDoc(
         doc(
