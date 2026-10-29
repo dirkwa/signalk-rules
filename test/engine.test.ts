@@ -976,3 +976,38 @@ describe('Engine — notification conditions', () => {
     expect(h.engine.getState().rules[0]?.conditions[0]?.truth).toBe('false')
   })
 })
+
+describe('Engine — boolean inputs and outputs', () => {
+  const MOTION = 'zigbee.main.saloonMotion.occupancy'
+  const LIGHT = 'zigbee.main.deckLight.state'
+  const lightOnMotion = (): RuleT =>
+    waterHeaterRule({
+      name: 'Deck light on motion',
+      conditions: [
+        { type: 'switch', path: MOTION, equals: 1, staleSeconds: 0 }
+      ],
+      actions: [{ type: 'setSwitch', path: LIGHT }]
+    })
+
+  it('follows a true/false sensor', async () => {
+    h = harness({ [LIGHT]: false })
+    h.engine.start(doc(lightOnMotion()))
+    h.push(MOTION, true)
+    await flush()
+    expect(h.puts).toEqual([{ path: LIGHT, value: 1 }])
+    h.clock.advance(5000)
+    h.push(MOTION, false)
+    await flush()
+    expect(h.puts).toEqual([
+      { path: LIGHT, value: 1 },
+      { path: LIGHT, value: 0 }
+    ])
+  })
+
+  it('takes a true/false output that already agrees as set', async () => {
+    h = harness({ [LIGHT]: true, [MOTION]: true })
+    h.engine.start(doc(lightOnMotion()))
+    await flush()
+    expect(h.puts).toEqual([])
+  })
+})

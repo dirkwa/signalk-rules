@@ -93,7 +93,7 @@ export function PathPicker({
           <input
             autoFocus
             type="search"
-            placeholder={`Search ${kind === 'switch' ? 'switches' : kind === 'notification' ? 'notifications' : 'paths'}…`}
+            placeholder={`Search ${kind === 'switch' || kind === 'output' ? 'switches' : kind === 'notification' ? 'notifications' : 'paths'}…`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -158,7 +158,7 @@ export function PathPicker({
                     <span className="picker-name picker-name-raw">
                       {info.path}
                     </span>
-                    {kind === 'switch' && (
+                    {(kind === 'switch' || kind === 'output') && (
                       <span className="picker-hint">
                         no name yet — use ✎ to name this switch
                       </span>

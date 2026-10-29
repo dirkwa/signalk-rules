@@ -156,6 +156,7 @@ describe('matchesKind', () => {
       lastValueKind: 'number'
     }
     expect(matchesKind(sw, 'switch')).toBe(true)
+    expect(matchesKind(sw, 'output')).toBe(true)
     expect(matchesKind(sw, 'numeric')).toBe(false)
   })
 
@@ -171,5 +172,31 @@ describe('matchesKind', () => {
       lastValueKind: 'string'
     }
     expect(matchesKind(state, 'notification')).toBe(false)
+  })
+
+  it('lists an on/off sensor as a switch input, not as an output', () => {
+    const motion: KnownPath = {
+      path: 'zigbee.main.saloonMotion.occupancy',
+      lastValueKind: 'boolean'
+    }
+    expect(matchesKind(motion, 'switch')).toBe(true)
+    expect(matchesKind(motion, 'output')).toBe(false)
+  })
+
+  it('lists any path that takes a PUT as an output', () => {
+    const light: KnownPath = {
+      path: 'zigbee.main.deckLight.state',
+      lastValueKind: 'boolean',
+      supportsPut: true
+    }
+    expect(matchesKind(light, 'output')).toBe(true)
+    expect(matchesKind(light, 'switch')).toBe(true)
+    const dimmer: KnownPath = {
+      path: 'zigbee.main.deckLight.brightness',
+      lastValueKind: 'number',
+      supportsPut: true
+    }
+    expect(matchesKind(dimmer, 'output')).toBe(true)
+    expect(matchesKind(dimmer, 'switch')).toBe(false)
   })
 })

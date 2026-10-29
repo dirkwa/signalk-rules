@@ -10,6 +10,7 @@ import type {
   Tri
 } from './shared/state-types.js'
 import {
+  coerceSwitchValue,
   combine,
   evalCondition,
   canGoStale,
@@ -57,6 +58,16 @@ function actionsKey(rule: RuleT): string {
 
 function conditionsKey(rule: RuleT): string {
   return canonical({ combinator: rule.combinator, conditions: rule.conditions })
+}
+
+/** Whether a switch already shows the value a PUT would set. Boolean
+ *  outputs (a Zigbee relay, say) take 1/0 and report true/false. */
+function alreadySet(actual: unknown, desired: number): boolean {
+  if (typeof actual === 'number') return actual === desired
+  if (typeof actual === 'boolean') {
+    return coerceSwitchValue(actual) === coerceSwitchValue(desired)
+  }
+  return false
 }
 
 export interface EngineClock {
@@ -569,7 +580,7 @@ export class Engine {
         ? (action.onValue ?? DEFAULTS.setSwitchOn)
         : (action.offValue ?? DEFAULTS.setSwitchOff)
     const actual = this.inputs.get(action.path)?.value
-    if (typeof actual === 'number' && actual === desired) {
+    if (alreadySet(actual, desired)) {
       // Edge-triggered semantics: never re-PUT what's already true, so
       // manual overrides stick between transitions.
       t.runtime.recordAction({

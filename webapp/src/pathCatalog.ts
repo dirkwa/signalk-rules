@@ -1,7 +1,8 @@
 import { SK_PATH_PATTERN } from '../../src/shared/schemas'
 
+/** `switch`: an on/off input; `output`: something a PUT can switch. */
 export type PickerKind =
-  'switch' | 'numeric' | 'string' | 'notification' | 'any'
+  'switch' | 'output' | 'numeric' | 'string' | 'notification' | 'any'
 
 export type ValueKind = 'number' | 'string' | 'boolean' | 'object' | 'unknown'
 
@@ -13,6 +14,8 @@ export interface SnapshotLeaf {
 export interface KnownPath {
   path: string
   lastValueKind: ValueKind
+  /** Set in the path's meta by the plugin that handles PUTs on it. */
+  supportsPut?: boolean
 }
 
 const SWITCH_RE = /^electrical\.switches\..*\.state$/
@@ -75,7 +78,9 @@ export function matchesKind(info: KnownPath, kind: PickerKind): boolean {
   if (isNotification) return false
   switch (kind) {
     case 'switch':
-      return SWITCH_RE.test(info.path)
+      return SWITCH_RE.test(info.path) || info.lastValueKind === 'boolean'
+    case 'output':
+      return SWITCH_RE.test(info.path) || info.supportsPut === true
     case 'numeric':
       return info.lastValueKind === 'number' && !SWITCH_RE.test(info.path)
     case 'string':
@@ -111,7 +116,9 @@ export function freeEntryPath(
     // Listed already, or its value is of another kind.
     if (matchesKind(info, kind) || info.lastValueKind !== 'unknown') return null
   }
-  if (kind === 'switch' && !SWITCH_RE.test(path)) return null
+  if ((kind === 'switch' || kind === 'output') && !SWITCH_RE.test(path)) {
+    return null
+  }
   if (kind === 'numeric' && SWITCH_RE.test(path)) return null
   const lower = path.toLowerCase()
   for (const other of Object.keys(known)) {
