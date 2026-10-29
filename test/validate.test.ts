@@ -276,6 +276,59 @@ describe('validateRulesDoc', () => {
     }
   })
 
+  describe('notification conditions', () => {
+    const onAnchor = (pathSuffix: string): RuleT =>
+      baseRule({
+        conditions: [
+          {
+            type: 'notification',
+            path: 'notifications.navigation.anchor',
+            atLeast: 'alarm'
+          }
+        ],
+        actions: [
+          {
+            type: 'notification',
+            pathSuffix,
+            state: 'alarm',
+            method: ['sound'],
+            message: 'Anchor dragging'
+          }
+        ]
+      })
+
+    it('accepts a rule on another notification', () => {
+      const r = validateRulesDoc(doc(onAnchor('anchor.horn')))
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([])
+    })
+
+    it('warns when a rule reacts to its own notification', () => {
+      const r = validateRulesDoc(doc(onAnchor('navigation.anchor')))
+      expect(r.ok).toBe(true)
+      expect(r.warnings.map((w) => w.path)).toEqual([
+        '/rules/0/conditions/0/path'
+      ])
+    })
+
+    it('rejects a path outside notifications', () => {
+      const r = validateRulesDoc(
+        doc(
+          baseRule({
+            conditions: [
+              {
+                type: 'notification',
+                path: 'navigation.anchor.state',
+                atLeast: 'alarm'
+              }
+            ]
+          })
+        )
+      )
+      expect(r.ok).toBe(false)
+    })
+  })
+
   describe('notification message placeholders', () => {
     const notify = (message: string): RuleT =>
       baseRule({

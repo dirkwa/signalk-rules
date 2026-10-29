@@ -93,7 +93,7 @@ export function PathPicker({
           <input
             autoFocus
             type="search"
-            placeholder={`Search ${kind === 'switch' ? 'switches' : 'paths'}…`}
+            placeholder={`Search ${kind === 'switch' ? 'switches' : kind === 'notification' ? 'notifications' : 'paths'}…`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -215,7 +215,11 @@ export function PathButton({
   invalid?: boolean
 }) {
   const label = useMetaStore((s) => s.paths[path]?.displayName ?? path)
-  const known = useMetaStore((s) => s.paths[path] !== undefined)
+  // A notification that was never raised is absent from the tree, which
+  // is its normal state rather than a typo.
+  const known = useMetaStore(
+    (s) => s.paths[path] !== undefined || kind === 'notification'
+  )
   const [open, setOpen] = useState(false)
   return (
     <>

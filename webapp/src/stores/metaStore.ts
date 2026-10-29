@@ -45,7 +45,7 @@ export const useMetaStore = create<MetaState>()((set, get) => ({
       const kinds = snapshotPaths(snapshot)
       const paths: Record<string, PathInfo> = {}
       const add = (path: string): void => {
-        if (path === '' || path.startsWith('notifications.')) return
+        if (path === '') return
         const m = meta[path]
         const k = kinds.get(path)
         paths[path] = {

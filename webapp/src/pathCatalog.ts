@@ -1,6 +1,7 @@
 import { SK_PATH_PATTERN } from '../../src/shared/schemas'
 
-export type PickerKind = 'switch' | 'numeric' | 'string' | 'any'
+export type PickerKind =
+  'switch' | 'numeric' | 'string' | 'notification' | 'any'
 
 export type ValueKind = 'number' | 'string' | 'boolean' | 'object' | 'unknown'
 
@@ -15,6 +16,7 @@ export interface KnownPath {
 }
 
 const SWITCH_RE = /^electrical\.switches\..*\.state$/
+const NOTIFICATION_PREFIX = 'notifications.'
 
 /** Keys that are never a child path, on any node. */
 const META_KEYS = new Set(['meta', 'timestamp', '$source'])
@@ -68,6 +70,9 @@ export function snapshotPaths(snapshot: unknown): Map<string, SnapshotLeaf> {
 }
 
 export function matchesKind(info: KnownPath, kind: PickerKind): boolean {
+  const isNotification = info.path.startsWith(NOTIFICATION_PREFIX)
+  if (kind === 'notification') return isNotification
+  if (isNotification) return false
   switch (kind) {
     case 'switch':
       return SWITCH_RE.test(info.path)
@@ -97,7 +102,10 @@ export function freeEntryPath(
   known: Readonly<Record<string, KnownPath>>
 ): string | null {
   const path = query.trim()
-  if (!PATH_RE.test(path) || path.startsWith('notifications.')) return null
+  if (!PATH_RE.test(path)) return null
+  if (path.startsWith(NOTIFICATION_PREFIX) !== (kind === 'notification')) {
+    return null
+  }
   const info = known[path]
   if (info !== undefined) {
     // Listed already, or its value is of another kind.

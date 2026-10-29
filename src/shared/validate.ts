@@ -88,6 +88,22 @@ export function validateRulesDoc(input: unknown): ValidationResult {
       }
     })
 
+    // A rule that reacts to its own notification keeps itself raised.
+    const raises = new Set(
+      rule.actions.flatMap((a) =>
+        a.type === 'notification' ? [`notifications.${a.pathSuffix}`] : []
+      )
+    )
+    rule.conditions.forEach((cond, ci) => {
+      if (cond.type === 'notification' && raises.has(cond.path)) {
+        issue(
+          warnings,
+          `/conditions/${ci}/path`,
+          'this rule raises the notification it reacts to, so it can hold itself on'
+        )
+      }
+    })
+
     const hasSetSwitch = rule.actions.some((a) => a.type === 'setSwitch')
     const hasPulse = rule.actions.some((a) => a.type === 'pulse')
     if (rule.options.reassertMinutes !== undefined && !hasSetSwitch) {

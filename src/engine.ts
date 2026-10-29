@@ -12,8 +12,9 @@ import type {
 import {
   combine,
   evalCondition,
-  freshReading,
+  canGoStale,
   initialCondState,
+  trustedReading,
   type EvalContext,
   type InputReading
 } from './conditions.js'
@@ -28,6 +29,7 @@ import { SunTracker } from './sun.js'
 import type { PersistedDecision, RulesStore } from './store.js'
 
 const POSITION_PATH = 'navigation.position'
+const NOTIFICATIONS_PREFIX = 'notifications.'
 const POSITION_SAVE_INTERVAL_MS = 10 * 60_000
 
 /** JSON with sorted keys, so the same actions saved in another key
@@ -615,8 +617,7 @@ export class Engine {
       )
       if (readers.length === 0) return `{${path}}`
       for (const cond of readers) {
-        if (!('path' in cond)) continue
-        const reading = freshReading(cond, ctx)
+        const reading = trustedReading(cond, ctx)
         if (reading !== null) return this.formatReading(path, reading.value)
       }
       return MISSING_VALUE
@@ -688,7 +689,8 @@ export class Engine {
     const wallNow = this.clock.wallMs()
     let staleInputs = 0
     const ttlMs = this.config.defaultStaleSeconds * 1000
-    for (const reading of this.inputs.values()) {
+    for (const [path, reading] of this.inputs) {
+      if (path.startsWith(NOTIFICATIONS_PREFIX)) continue
       if (ttlMs > 0 && wallNow - reading.receivedAt > ttlMs) staleInputs++
     }
     return {
@@ -713,7 +715,7 @@ export class Engine {
         ('staleSeconds' in cond ? cond.staleSeconds : undefined) ??
         this.config.defaultStaleSeconds
       const stale =
-        path !== undefined &&
+        canGoStale(cond) &&
         (reading === undefined ||
           (ttl > 0 && wallNow - reading.receivedAt > ttl * 1000))
       let truth: Tri
@@ -815,7 +817,7 @@ export class Engine {
           reading !== undefined
             ? Math.round((wallNow - reading.receivedAt) / 1000)
             : undefined,
-        stale: truths[i] === 'unknown' && path !== undefined,
+        stale: truths[i] === 'unknown' && canGoStale(cond),
         truth: truths[i] ?? 'unknown'
       }
     })

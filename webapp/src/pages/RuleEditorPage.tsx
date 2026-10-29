@@ -27,7 +27,12 @@ const NEW_CONDITIONS: Record<string, ConditionT> = {
   },
   string: { type: 'string', path: 'navigation.state', equals: 'anchored' },
   timeOfDay: { type: 'timeOfDay', from: '08:00', to: '20:00' },
-  sun: { type: 'sun', during: 'day' }
+  sun: { type: 'sun', during: 'day' },
+  notification: {
+    type: 'notification',
+    path: 'notifications.navigation.anchor',
+    atLeast: 'alarm'
+  }
 }
 
 /** Errors/warnings scoped to one rule, keyed for row highlighting. */
@@ -199,6 +204,13 @@ export function RuleEditorPage({ ruleId, onBack }: RuleEditorPageProps) {
           </button>
           <button type="button" className="btn" onClick={() => addCond('sun')}>
             day / night…
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => addCond('notification')}
+          >
+            alarm is raised…
           </button>
         </div>
 

@@ -877,3 +877,61 @@ describe('Engine — values in a notification message', () => {
     ).toEqual(['raise notifications.fridge.warm (warn): Fridge at 290'])
   })
 })
+
+describe('Engine — notification conditions', () => {
+  const ANCHOR = 'notifications.navigation.anchor'
+  const DECK = 'electrical.switches.bank.10.5.state'
+  const deckOnAnchor = (over: Partial<RuleT> = {}): RuleT =>
+    waterHeaterRule({
+      name: 'Deck lights on anchor alarm',
+      conditions: [{ type: 'notification', path: ANCHOR, atLeast: 'alarm' }],
+      actions: [{ type: 'setSwitch', path: DECK }],
+      ...over
+    })
+  const alarm = (state: string) => ({
+    state,
+    method: ['visual', 'sound'],
+    message: 'Anchor dragging'
+  })
+
+  it('switches on while the anchor alarm is raised, off once cleared', async () => {
+    h = harness({ [DECK]: 0 })
+    h.engine.start(doc(deckOnAnchor()))
+    await flush()
+    expect(h.puts).toEqual([])
+
+    h.push(ANCHOR, alarm('emergency'))
+    await flush()
+    expect(h.puts).toEqual([{ path: DECK, value: 1 }])
+
+    h.clock.advance(5000)
+    h.push(ANCHOR, null)
+    await flush()
+    expect(h.puts).toEqual([
+      { path: DECK, value: 1 },
+      { path: DECK, value: 0 }
+    ])
+  })
+
+  it('keeps a raised alarm however long ago it was sent', async () => {
+    h = harness({ [DECK]: 0 })
+    h.engine.start(doc(deckOnAnchor()))
+    h.push(ANCHOR, alarm('alarm'))
+    await flush()
+    h.clock.advance(3_600_000)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(h.puts).toEqual([{ path: DECK, value: 1 }])
+    const cond = h.engine.getState().rules[0]?.conditions[0]
+    expect(cond?.stale).toBe(false)
+    expect(cond?.truth).toBe('true')
+  })
+
+  it('ignores a warning below the chosen state', async () => {
+    h = harness({ [DECK]: 0 })
+    h.engine.start(doc(deckOnAnchor()))
+    h.push(ANCHOR, alarm('warn'))
+    await flush()
+    expect(h.puts).toEqual([])
+    expect(h.engine.getState().rules[0]?.conditions[0]?.truth).toBe('false')
+  })
+})

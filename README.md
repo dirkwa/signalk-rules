@@ -14,6 +14,9 @@ Classic use cases, each a one-minute setup:
 - **Generator autostart** — pulse the start circuit for 30 s when SOC
   drops below 25 %, pulse stop at 84 %, with a cooldown so a restart
   loop can never machine-gun the starter.
+- **Deck lights on anchor alarm** — on while the anchor alarm
+  (`notifications.navigation.anchor`) is raised, and ten minutes
+  after it clears.
 
 ## How it behaves
 
@@ -49,6 +52,12 @@ Actions go through normal Signal K PUTs, so any switching backend that
 registers action handlers works (e.g. `signalk-n2k-switching` for
 NMEA 2000 relay banks). Rules can additionally raise
 `notifications.*` with a chosen state and message.
+
+A rule can also react to a notification another plugin raises: *WHEN
+[Anchor alarm] [is raised at alarm or worse] THEN [Deck lights]
+follows*. It is true while the notification's state is at least the
+chosen one, and false once it is cleared or was never raised. Since a
+notification is sent only when it changes, it never goes stale.
 
 A message can quote a value the rule's conditions read: `{path}` is
 replaced when the notification is raised, in the units the editor

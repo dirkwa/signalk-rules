@@ -81,12 +81,37 @@ export const SunCondition = Type.Object({
   ...condBase
 })
 
+/** Raised states, least severe first; `normal` and `nominal` raise nothing. */
+export const RAISED_STATES = ['alert', 'warn', 'alarm', 'emergency'] as const
+
+/**
+ * True while the notification at `path` is raised at `atLeast` or a
+ * more severe state. It has no staleness: a notification is sent only
+ * when it changes, and one that was never raised or has been cleared
+ * (`null`) is simply not raised.
+ */
+export const NotificationCondition = Type.Object({
+  type: Type.Literal('notification'),
+  path: Type.String({
+    pattern: '^notifications(\\.[A-Za-z0-9_-]+)+$',
+    description: 'Self notification path'
+  }),
+  atLeast: Type.Union([
+    Type.Literal('alert'),
+    Type.Literal('warn'),
+    Type.Literal('alarm'),
+    Type.Literal('emergency')
+  ]),
+  negate: Type.Optional(Type.Boolean())
+})
+
 export const Condition = Type.Union([
   NumericCondition,
   SwitchCondition,
   StringCondition,
   TimeOfDayCondition,
-  SunCondition
+  SunCondition,
+  NotificationCondition
 ])
 
 // ---------- Actions ----------
@@ -169,6 +194,7 @@ export type SwitchConditionT = Static<typeof SwitchCondition>
 export type StringConditionT = Static<typeof StringCondition>
 export type TimeOfDayConditionT = Static<typeof TimeOfDayCondition>
 export type SunConditionT = Static<typeof SunCondition>
+export type NotificationConditionT = Static<typeof NotificationCondition>
 export type ConditionT = Static<typeof Condition>
 export type SetSwitchActionT = Static<typeof SetSwitchAction>
 export type PulseActionT = Static<typeof PulseAction>

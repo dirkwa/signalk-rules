@@ -1,6 +1,7 @@
 import type { ConditionT, NumericConditionT } from './shared/schemas.js'
 import type { Tri } from './shared/state-types.js'
 import type { SunTracker } from './sun.js'
+import { isRaisedAtLeast } from './shared/notifications.js'
 
 export interface InputReading {
   value: unknown
@@ -114,6 +115,14 @@ function evalRaw(cond: ConditionT, state: CondState, ctx: EvalContext): Tri {
           : minutes >= from || minutes < to
       return active ? 'true' : 'false'
     }
+    case 'notification': {
+      const raised = isRaisedAtLeast(
+        ctx.getInput(cond.path)?.value,
+        cond.atLeast
+      )
+      if (raised === undefined) return 'unknown'
+      return raised ? 'true' : 'false'
+    }
     case 'sun': {
       const day = ctx.sun.isDay(
         ctx.wallDate,
@@ -125,6 +134,22 @@ function evalRaw(cond: ConditionT, state: CondState, ctx: EvalContext): Tri {
       return active ? 'true' : 'false'
     }
   }
+}
+
+/** Whether a condition's input can go stale: notifications are sent
+ *  only on change, so their last value holds however old it is. */
+export function canGoStale(cond: ConditionT): boolean {
+  return 'path' in cond && cond.type !== 'notification'
+}
+
+/** The reading a condition still trusts, or null. */
+export function trustedReading(
+  cond: ConditionT,
+  ctx: EvalContext
+): InputReading | null {
+  if (!('path' in cond)) return null
+  if (cond.type === 'notification') return ctx.getInput(cond.path) ?? null
+  return freshReading(cond, ctx)
 }
 
 export function freshReading(
