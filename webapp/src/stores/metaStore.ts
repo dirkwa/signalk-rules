@@ -47,8 +47,8 @@ export const useMetaStore = create<MetaState>()((set, get) => ({
       const paths: Record<string, PathInfo> = {}
       const add = (path: string): void => {
         if (path === '') return
-        const m = meta[path]
         const k = kinds.get(path)
+        const m = meta[path] ?? k?.meta
         paths[path] = {
           path,
           displayName:

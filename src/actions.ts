@@ -94,6 +94,13 @@ export class PutExecutor {
     this.pump(path, st)
   }
 
+  /** Whether a PUT to `path` is in flight or queued: until it lands,
+   *  the path's reported value says nothing about what it will be. */
+  isBusy(path: string): boolean {
+    const st = this.states.get(path)
+    return st !== undefined && (st.sending || st.next !== null)
+  }
+
   dispose(): void {
     this.disposed = true
     for (const t of this.timers) clearTimeout(t)

@@ -1,4 +1,5 @@
 import { SK_PATH_PATTERN } from '../../src/shared/schemas'
+import type { PathMeta } from './api'
 
 /** `switch`: an on/off input; `output`: something a PUT can switch. */
 export type PickerKind =
@@ -9,6 +10,8 @@ export type ValueKind = 'number' | 'string' | 'boolean' | 'object' | 'unknown'
 export interface SnapshotLeaf {
   kind: ValueKind
   value: unknown
+  /** The node's own meta, for when the bulk meta request fails. */
+  meta?: PathMeta
 }
 
 export interface KnownPath {
@@ -52,7 +55,15 @@ function walk(
   const obj = node as Record<string, unknown>
   const valued = 'value' in obj && 'timestamp' in obj
   if (valued && prefix !== '') {
-    out.set(prefix, { kind: kindOf(obj['value']), value: obj['value'] })
+    const meta = obj['meta']
+    out.set(prefix, {
+      kind: kindOf(obj['value']),
+      value: obj['value'],
+      meta:
+        meta !== null && typeof meta === 'object'
+          ? (meta as PathMeta)
+          : undefined
+    })
   }
   // A valued node can still have children of its own, e.g.
   // environment.outside.pressure.threeHoursDelta beside the
@@ -116,9 +127,7 @@ export function freeEntryPath(
     // Listed already, or its value is of another kind.
     if (matchesKind(info, kind) || info.lastValueKind !== 'unknown') return null
   }
-  if ((kind === 'switch' || kind === 'output') && !SWITCH_RE.test(path)) {
-    return null
-  }
+  if (kind === 'switch' && !SWITCH_RE.test(path)) return null
   if (kind === 'numeric' && SWITCH_RE.test(path)) return null
   const lower = path.toLowerCase()
   for (const other of Object.keys(known)) {

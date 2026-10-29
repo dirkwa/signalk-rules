@@ -42,10 +42,11 @@ const snapshot = {
 describe('snapshotPaths', () => {
   const paths = snapshotPaths(snapshot)
 
-  it('keeps a valued node', () => {
+  it('keeps a valued node with its meta', () => {
     expect(paths.get('environment.outside.pressure')).toEqual({
       kind: 'number',
-      value: 101300
+      value: 101300,
+      meta: { units: 'Pa' }
     })
   })
 
@@ -139,6 +140,12 @@ describe('freeEntryPath', () => {
     expect(free(anchor, 'string')).toBeNull()
     expect(free(anchor, 'notification')).toBe(anchor)
     expect(free('navigation.anchor.state', 'notification')).toBeNull()
+  })
+
+  it('offers an output not seen yet anywhere in the tree', () => {
+    const relay = 'zigbee.main.deckLight.state'
+    expect(free(relay, 'output')).toBe(relay)
+    expect(free(relay, 'switch')).toBeNull()
   })
 
   it('keeps switch and numeric pickers apart', () => {

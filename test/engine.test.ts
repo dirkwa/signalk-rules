@@ -1011,3 +1011,30 @@ describe('Engine — boolean inputs and outputs', () => {
     expect(h.puts).toEqual([])
   })
 })
+
+describe('Engine — a decision that turns while its PUT is pending', () => {
+  it('sends the off value although the switch still reads off', async () => {
+    h = harness(
+      { [HEATER]: 0 },
+      {
+        // The relay never confirms, so the ON stays in flight.
+        reply: (p) =>
+          p === HEATER ? Promise.resolve({ state: 'PENDING' }) : undefined
+      }
+    )
+    h.engine.start(doc(waterHeaterRule()))
+    h.push(SOLAR, 5)
+    await flush()
+    expect(h.puts).toEqual([{ path: HEATER, value: 1 }])
+
+    h.clock.advance(5000)
+    h.push(SOLAR, 0.3)
+    await flush()
+    // Timeout, retry and timeout again release the queue.
+    for (let i = 0; i < 30; i++) {
+      h.clock.advance(2000)
+      await vi.advanceTimersByTimeAsync(2000)
+    }
+    expect(h.puts.at(-1)).toEqual({ path: HEATER, value: 0 })
+  })
+})

@@ -580,7 +580,7 @@ export class Engine {
         ? (action.onValue ?? DEFAULTS.setSwitchOn)
         : (action.offValue ?? DEFAULTS.setSwitchOff)
     const actual = this.inputs.get(action.path)?.value
-    if (alreadySet(actual, desired)) {
+    if (!this.putExec.isBusy(action.path) && alreadySet(actual, desired)) {
       // Edge-triggered semantics: never re-PUT what's already true, so
       // manual overrides stick between transitions.
       t.runtime.recordAction({
