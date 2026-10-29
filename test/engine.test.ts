@@ -1038,3 +1038,42 @@ describe('Engine — a decision that turns while its PUT is pending', () => {
     expect(h.puts.at(-1)).toEqual({ path: HEATER, value: 0 })
   })
 })
+
+describe('Engine — switches that stay on', () => {
+  const keepOnRule = (over: Partial<RuleT> = {}): RuleT =>
+    waterHeaterRule({
+      actions: [{ type: 'setSwitch', path: HEATER, keepOn: true }],
+      ...over
+    })
+
+  it('switches on, and leaves the switch on when the conditions clear', async () => {
+    h = harness({ [HEATER]: 0 })
+    h.engine.start(doc(keepOnRule()))
+    h.push(SOLAR, 5)
+    await flush()
+    h.clock.advance(5000)
+    h.push(SOLAR, 0.3)
+    await flush()
+    expect(h.puts).toEqual([{ path: HEATER, value: 1 }])
+    expect(h.engine.getState().rules[0]?.decision).toBe('off')
+  })
+
+  it('never reasserts off', async () => {
+    h = harness({ [HEATER]: 1, [SOLAR]: 0.3 })
+    h.engine.start(doc(keepOnRule({ options: { reassertMinutes: 1 } })))
+    await flush()
+    h.clock.advance(61_000)
+    h.engine.tick()
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(h.puts).toEqual([])
+  })
+
+  it('says in a test that it leaves the switch alone', async () => {
+    h = harness({ [HEATER]: 1, [SOLAR]: 0.3 })
+    h.engine.start(doc(keepOnRule()))
+    await flush()
+    expect(
+      h.engine.testRule('aaaaaaaa-1111-2222-3333-444444444444')?.wouldDo
+    ).toEqual([`leave ${HEATER} as it is`])
+  })
+})

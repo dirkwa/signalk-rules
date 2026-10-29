@@ -121,7 +121,10 @@ export const SetSwitchAction = Type.Object({
   type: Type.Literal('setSwitch'),
   path: SkPath,
   onValue: Type.Optional(Type.Number()),
-  offValue: Type.Optional(Type.Number())
+  offValue: Type.Optional(Type.Number()),
+  /** Never PUT offValue: once on, the switch stays on until someone
+   *  switches it off. */
+  keepOn: Type.Optional(Type.Boolean())
 })
 
 /** Rising edge only: PUT value, auto-revert after `seconds`. */

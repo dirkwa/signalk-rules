@@ -23,7 +23,10 @@ Classic use cases, each a one-minute setup:
 - **Edge-triggered.** A rule sends a command only when its decision
   *changes*. Manual overrides (panel, plotter, another app) stick
   until the next transition. Rules that must stay enforced can opt
-  into a per-rule *re-assert every N minutes*.
+  into a per-rule *re-assert every N minutes*. A switch can instead be set
+  to *stay on*: the rule switches it on and never off, so it stays on
+  until someone switches it off. To keep it on only a while after the
+  conditions clear, set a hold before switching off instead.
 - **Restart-proof.** A rule keeps its decision across a server
   restart and across edits that leave its actions and dry-run setting
   alone, so neither counts as a transition and a manual override
