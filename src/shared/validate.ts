@@ -88,14 +88,22 @@ export function validateRulesDoc(input: unknown): ValidationResult {
       }
     })
 
-    // A rule that reacts to its own notification keeps itself raised.
+    // A rule that reacts to its own notification keeps itself raised,
+    // or, negated, raises and clears it in a loop.
     const raises = new Set(
       rule.actions.flatMap((a) =>
         a.type === 'notification' ? [`notifications.${a.pathSuffix}`] : []
       )
     )
     rule.conditions.forEach((cond, ci) => {
-      if (cond.type === 'notification' && raises.has(cond.path)) {
+      if (cond.type !== 'notification' || !raises.has(cond.path)) return
+      if (cond.negate === true) {
+        issue(
+          errors,
+          `/conditions/${ci}/path`,
+          'this rule raises the notification it reacts to, and the inverted condition would raise and clear it in a loop'
+        )
+      } else {
         issue(
           warnings,
           `/conditions/${ci}/path`,

@@ -311,6 +311,21 @@ describe('validateRulesDoc', () => {
       ])
     })
 
+    it('rejects an inverted condition on its own notification', () => {
+      const rule = onAnchor('navigation.anchor')
+      const r = validateRulesDoc(
+        doc({
+          ...rule,
+          conditions: rule.conditions.map((c) => ({ ...c, negate: true }))
+        })
+      )
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.errors.map((e) => e.path)).toEqual([
+        '/rules/0/conditions/0/path'
+      ])
+    })
+
     it('rejects a path outside notifications', () => {
       const r = validateRulesDoc(
         doc(

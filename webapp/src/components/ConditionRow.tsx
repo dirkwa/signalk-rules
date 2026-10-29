@@ -212,6 +212,7 @@ function ConditionInputs({
           />
           <span>is raised at</span>
           <select
+            aria-label="Minimum notification state"
             value={cond.atLeast}
             onChange={(e) =>
               onChange({
