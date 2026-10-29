@@ -280,3 +280,65 @@ describe('Kleene combine', () => {
     expect(combine('any', [])).toBe('false')
   })
 })
+
+describe('notification conditions', () => {
+  const anchor: ConditionT = {
+    type: 'notification',
+    path: 'notifications.navigation.anchor',
+    atLeast: 'alarm'
+  }
+  const raised = (state: string) =>
+    reading({ state, method: ['visual', 'sound'], message: 'Anchor' })
+
+  it('is true at the chosen state or worse', () => {
+    const at = (r: InputReading) =>
+      evalCondition(
+        anchor,
+        initialCondState(),
+        ctx({ 'notifications.navigation.anchor': r })
+      )
+    expect(at(raised('alarm'))).toBe('true')
+    expect(at(raised('emergency'))).toBe('true')
+    expect(at(raised('warn'))).toBe('false')
+    expect(at(raised('normal'))).toBe('false')
+    expect(at(raised('nominal'))).toBe('false')
+  })
+
+  it('is false when cleared or never raised', () => {
+    expect(
+      evalCondition(
+        anchor,
+        initialCondState(),
+        ctx({ 'notifications.navigation.anchor': reading(null) })
+      )
+    ).toBe('false')
+    expect(evalCondition(anchor, initialCondState(), ctx({}))).toBe('false')
+  })
+
+  it('never goes stale, since notifications are sent only on change', () => {
+    expect(
+      evalCondition(
+        anchor,
+        initialCondState(),
+        ctx({
+          'notifications.navigation.anchor': {
+            value: { state: 'emergency', method: [], message: 'Anchor' },
+            receivedAt: 1_000_000 - 86_400_000
+          }
+        })
+      )
+    ).toBe('true')
+  })
+
+  it('is unknown for a value that is no notification', () => {
+    const at = (value: unknown) =>
+      evalCondition(
+        anchor,
+        initialCondState(),
+        ctx({ 'notifications.navigation.anchor': reading(value) })
+      )
+    expect(at('alarm')).toBe('unknown')
+    expect(at({ state: 'panic' })).toBe('unknown')
+    expect(at({ message: 'no state' })).toBe('unknown')
+  })
+})

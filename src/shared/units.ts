@@ -5,6 +5,7 @@
  * it writes a value into a notification message: a stored rule never
  * holds a display unit.
  */
+import { notificationState } from './notifications.js'
 
 export interface UnitDef {
   /** Suffix shown next to inputs and live values, e.g. "kn". */
@@ -69,6 +70,8 @@ export function formatValue(
 ): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     if (value === undefined || value === null) return '—'
+    const state = notificationState(value)
+    if (typeof state === 'string') return state
     if (typeof value === 'object') return JSON.stringify(value)
     return String(value)
   }

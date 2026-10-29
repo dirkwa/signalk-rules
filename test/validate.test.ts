@@ -276,6 +276,159 @@ describe('validateRulesDoc', () => {
     }
   })
 
+  describe('notification conditions', () => {
+    const onAnchor = (pathSuffix: string): RuleT =>
+      baseRule({
+        conditions: [
+          {
+            type: 'notification',
+            path: 'notifications.navigation.anchor',
+            atLeast: 'alarm'
+          }
+        ],
+        actions: [
+          {
+            type: 'notification',
+            pathSuffix,
+            state: 'alarm',
+            method: ['sound'],
+            message: 'Anchor dragging'
+          }
+        ]
+      })
+
+    it('accepts a rule on another notification', () => {
+      const r = validateRulesDoc(doc(onAnchor('anchor.horn')))
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([])
+    })
+
+    it('warns when a rule reacts to its own notification', () => {
+      const r = validateRulesDoc(doc(onAnchor('navigation.anchor')))
+      expect(r.ok).toBe(true)
+      expect(r.warnings.map((w) => w.path)).toEqual([
+        '/rules/0/conditions/0/path'
+      ])
+    })
+
+    it('warns about an inverted condition on its own notification', () => {
+      const rule = onAnchor('navigation.anchor')
+      const r = validateRulesDoc(
+        doc({
+          ...rule,
+          conditions: rule.conditions.map((c) => ({ ...c, negate: true }))
+        })
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toHaveLength(1)
+      expect(r.warnings[0]?.message).toContain('raise and clear it in a loop')
+    })
+
+    const chain = (
+      id: string,
+      watches: string,
+      raises: string,
+      negate?: true
+    ): RuleT =>
+      baseRule({
+        id,
+        conditions: [
+          {
+            type: 'notification',
+            path: `notifications.${watches}`,
+            atLeast: 'alert',
+            negate
+          }
+        ],
+        actions: [
+          {
+            type: 'notification',
+            pathSuffix: raises,
+            state: 'alert',
+            method: ['visual'],
+            message: raises
+          }
+        ]
+      })
+
+    it('warns about a loop across rules with an inverted condition', () => {
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
+          chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b')
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings.map((w) => w.path)).toEqual([
+        '/rules/0/conditions/0/path',
+        '/rules/1/conditions/0/path'
+      ])
+      expect(r.warnings[0]?.message).toContain('raise and clear it in a loop')
+    })
+
+    it('leaves out rules that send no notification', () => {
+      const paused = {
+        ...chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b'),
+        enabled: false
+      }
+      const dryRun = {
+        ...chain('aaaaaaaa-0000-0000-0000-00000000000c', 'a', 'b'),
+        dryRun: true
+      }
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
+          paused,
+          dryRun
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([])
+    })
+
+    it('warns about a loop across rules that can hold itself raised', () => {
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a'),
+          chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b')
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings.map((w) => w.path)).toEqual([
+        '/rules/0/conditions/0/path',
+        '/rules/1/conditions/0/path'
+      ])
+    })
+
+    it('accepts a chain that does not come back', () => {
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
+          chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'c')
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([])
+    })
+
+    it('rejects a path outside notifications', () => {
+      const r = validateRulesDoc(
+        doc(
+          baseRule({
+            conditions: [
+              {
+                type: 'notification',
+                path: 'navigation.anchor.state',
+                atLeast: 'alarm'
+              }
+            ]
+          })
+        )
+      )
+      expect(r.ok).toBe(false)
+    })
+  })
+
   describe('notification message placeholders', () => {
     const notify = (message: string): RuleT =>
       baseRule({

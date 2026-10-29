@@ -1,4 +1,9 @@
-import type { ConditionT, NumericConditionT } from '../../../src/shared/schemas'
+import {
+  RAISED_STATES,
+  type ConditionT,
+  type NotificationConditionT,
+  type NumericConditionT
+} from '../../../src/shared/schemas'
 import type { ConditionState } from '../../../src/shared/state-types'
 import { LiveValue } from './LiveValue'
 import { NumberWithUnit } from './NumberWithUnit'
@@ -71,7 +76,7 @@ export function ConditionRow({
               errorFields={errorFields}
             />
           )}
-          {'path' in cond && (
+          {'path' in cond && cond.type !== 'notification' && (
             <label className="mini-field">
               stale after
               <input
@@ -194,6 +199,34 @@ function ConditionInputs({
             <option value="sailing" />
             <option value="motoring" />
           </datalist>
+        </>
+      )
+    case 'notification':
+      return (
+        <>
+          <PathButton
+            kind="notification"
+            path={cond.path}
+            invalid={errorFields.has('path')}
+            onChange={(path) => onChange({ ...cond, path })}
+          />
+          <span>is raised at</span>
+          <select
+            aria-label="Minimum notification state"
+            value={cond.atLeast}
+            onChange={(e) =>
+              onChange({
+                ...cond,
+                atLeast: e.target.value as NotificationConditionT['atLeast']
+              })
+            }
+          >
+            {RAISED_STATES.map((state) => (
+              <option key={state} value={state}>
+                {state} or worse
+              </option>
+            ))}
+          </select>
         </>
       )
     case 'timeOfDay':

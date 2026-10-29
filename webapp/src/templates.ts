@@ -134,6 +134,29 @@ export const TEMPLATES: RuleTemplate[] = [
         options: { holdTrueSeconds: 60, cooldownSeconds: 1800 }
       }
     ]
+  },
+  {
+    title: 'Deck lights on anchor alarm',
+    blurb: 'Lights the deck while the anchor drags, and 10 min after',
+    rules: [
+      {
+        name: 'Deck lights on anchor alarm',
+        enabled: false,
+        dryRun: true,
+        combinator: 'all',
+        conditions: [
+          {
+            type: 'notification',
+            path: 'notifications.navigation.anchor',
+            atLeast: 'alarm'
+          }
+        ],
+        actions: [
+          { type: 'setSwitch', path: 'electrical.switches.bank.0.5.state' }
+        ],
+        options: { holdFalseSeconds: 600 }
+      }
+    ]
   }
 ]
 

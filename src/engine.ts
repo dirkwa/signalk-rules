@@ -12,8 +12,9 @@ import type {
 import {
   combine,
   evalCondition,
-  freshReading,
+  canGoStale,
   initialCondState,
+  trustedReading,
   type EvalContext,
   type InputReading
 } from './conditions.js'
@@ -25,9 +26,11 @@ import {
   type PutFn
 } from './actions.js'
 import { SunTracker } from './sun.js'
+import { notificationState } from './shared/notifications.js'
 import type { PersistedDecision, RulesStore } from './store.js'
 
 const POSITION_PATH = 'navigation.position'
+const NOTIFICATIONS_PREFIX = 'notifications.'
 const POSITION_SAVE_INTERVAL_MS = 10 * 60_000
 
 /** JSON with sorted keys, so the same actions saved in another key
@@ -235,10 +238,35 @@ export class Engine {
     this.doc = doc
 
     this.rebuildSubscriptions()
+    this.seedRestoredNotifications(restoredOn)
     for (const t of this.tracked.values()) this.evaluateRule(t)
     this.persistRuntimeState()
     this.updateStatus()
     return restoredOn
+  }
+
+  /** A rule restored 'on' raises its notifications again only after the
+   *  first evaluation, and a server restart has dropped them meanwhile.
+   *  A rule reading one of them must not see it cleared in between, or
+   *  it would turn off and on again and flip its outputs. */
+  private seedRestoredNotifications(restoredOn: readonly TrackedRule[]): void {
+    for (const t of restoredOn) {
+      if (t.rule.dryRun) continue
+      for (const action of t.rule.actions) {
+        if (action.type !== 'notification') continue
+        const path = `notifications.${action.pathSuffix}`
+        if (!this.subscriptions.has(path)) continue
+        if (notificationState(this.inputs.get(path)?.value) !== null) continue
+        this.inputs.set(path, {
+          value: {
+            state: action.state,
+            method: [...action.method],
+            message: action.message
+          },
+          receivedAt: this.clock.wallMs()
+        })
+      }
+    }
   }
 
   /** Committed decisions worth carrying over, by rule id. */
@@ -615,8 +643,7 @@ export class Engine {
       )
       if (readers.length === 0) return `{${path}}`
       for (const cond of readers) {
-        if (!('path' in cond)) continue
-        const reading = freshReading(cond, ctx)
+        const reading = trustedReading(cond, ctx)
         if (reading !== null) return this.formatReading(path, reading.value)
       }
       return MISSING_VALUE
@@ -688,7 +715,8 @@ export class Engine {
     const wallNow = this.clock.wallMs()
     let staleInputs = 0
     const ttlMs = this.config.defaultStaleSeconds * 1000
-    for (const reading of this.inputs.values()) {
+    for (const [path, reading] of this.inputs) {
+      if (path.startsWith(NOTIFICATIONS_PREFIX)) continue
       if (ttlMs > 0 && wallNow - reading.receivedAt > ttlMs) staleInputs++
     }
     return {
@@ -713,7 +741,7 @@ export class Engine {
         ('staleSeconds' in cond ? cond.staleSeconds : undefined) ??
         this.config.defaultStaleSeconds
       const stale =
-        path !== undefined &&
+        canGoStale(cond) &&
         (reading === undefined ||
           (ttl > 0 && wallNow - reading.receivedAt > ttl * 1000))
       let truth: Tri
@@ -815,7 +843,7 @@ export class Engine {
           reading !== undefined
             ? Math.round((wallNow - reading.receivedAt) / 1000)
             : undefined,
-        stale: truths[i] === 'unknown' && path !== undefined,
+        stale: truths[i] === 'unknown' && canGoStale(cond),
         truth: truths[i] ?? 'unknown'
       }
     })

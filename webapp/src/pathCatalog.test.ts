@@ -133,8 +133,12 @@ describe('freeEntryPath', () => {
     expect(hasChildren('network.providers', known)).toBe(false)
   })
 
-  it('refuses notifications', () => {
-    expect(free('notifications.navigation.anchor', 'any')).toBeNull()
+  it('offers notifications only to the notification picker', () => {
+    const anchor = 'notifications.navigation.anchor'
+    expect(free(anchor, 'any')).toBeNull()
+    expect(free(anchor, 'string')).toBeNull()
+    expect(free(anchor, 'notification')).toBe(anchor)
+    expect(free('navigation.anchor.state', 'notification')).toBeNull()
   })
 
   it('keeps switch and numeric pickers apart', () => {
@@ -153,5 +157,19 @@ describe('matchesKind', () => {
     }
     expect(matchesKind(sw, 'switch')).toBe(true)
     expect(matchesKind(sw, 'numeric')).toBe(false)
+  })
+
+  it('lists a notification only in the notification picker', () => {
+    const anchor: KnownPath = {
+      path: 'notifications.navigation.anchor',
+      lastValueKind: 'object'
+    }
+    expect(matchesKind(anchor, 'notification')).toBe(true)
+    expect(matchesKind(anchor, 'any')).toBe(false)
+    const state: KnownPath = {
+      path: 'navigation.state',
+      lastValueKind: 'string'
+    }
+    expect(matchesKind(state, 'notification')).toBe(false)
   })
 })
