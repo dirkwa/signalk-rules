@@ -311,7 +311,7 @@ describe('validateRulesDoc', () => {
       ])
     })
 
-    it('rejects an inverted condition on its own notification', () => {
+    it('warns about an inverted condition on its own notification', () => {
       const rule = onAnchor('navigation.anchor')
       const r = validateRulesDoc(
         doc({
@@ -319,11 +319,9 @@ describe('validateRulesDoc', () => {
           conditions: rule.conditions.map((c) => ({ ...c, negate: true }))
         })
       )
-      expect(r.ok).toBe(false)
-      if (r.ok) return
-      expect(r.errors.map((e) => e.path)).toEqual([
-        '/rules/0/conditions/0/path'
-      ])
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toHaveLength(1)
+      expect(r.warnings[0]?.message).toContain('raise and clear it in a loop')
     })
 
     const chain = (
@@ -353,19 +351,39 @@ describe('validateRulesDoc', () => {
         ]
       })
 
-    it('rejects a loop across rules with an inverted condition', () => {
+    it('warns about a loop across rules with an inverted condition', () => {
       const r = validateRulesDoc(
         doc(
           chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
           chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b')
         )
       )
-      expect(r.ok).toBe(false)
-      if (r.ok) return
-      expect(r.errors.map((e) => e.path)).toEqual([
+      expect(r.ok).toBe(true)
+      expect(r.warnings.map((w) => w.path)).toEqual([
         '/rules/0/conditions/0/path',
         '/rules/1/conditions/0/path'
       ])
+      expect(r.warnings[0]?.message).toContain('raise and clear it in a loop')
+    })
+
+    it('leaves out rules that send no notification', () => {
+      const paused = {
+        ...chain('aaaaaaaa-0000-0000-0000-00000000000b', 'a', 'b'),
+        enabled: false
+      }
+      const dryRun = {
+        ...chain('aaaaaaaa-0000-0000-0000-00000000000c', 'a', 'b'),
+        dryRun: true
+      }
+      const r = validateRulesDoc(
+        doc(
+          chain('aaaaaaaa-0000-0000-0000-00000000000a', 'b', 'a', true),
+          paused,
+          dryRun
+        )
+      )
+      expect(r.ok).toBe(true)
+      expect(r.warnings).toEqual([])
     })
 
     it('warns about a loop across rules that can hold itself raised', () => {

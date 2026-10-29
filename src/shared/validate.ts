@@ -106,7 +106,7 @@ export function validateRulesDoc(input: unknown): ValidationResult {
     }
   })
 
-  checkNotificationLoops(doc.rules, errors, warnings)
+  checkNotificationLoops(doc.rules, warnings)
 
   // A switch driven by more than one enabled rule will fight.
   const targets = new Map<string, RuleT[]>()
@@ -147,16 +147,23 @@ interface NotificationEdge {
  * it feeds back: with an odd number of inverted conditions on the way,
  * a raise leads to its own clear and the rules flip in a loop; with an
  * even number they can hold each other raised.
+ *
+ * Only a warning: whether a cycle really flips also depends on states,
+ * thresholds and holds, and an error would make the plugin refuse the
+ * whole rules file at start. Only rules that send notifications (live
+ * and enabled) take part.
  */
 function checkNotificationLoops(
   rules: readonly RuleT[],
-  errors: ValidationIssue[],
   warnings: ValidationIssue[]
 ): void {
   const edges = new Map<string, NotificationEdge[]>()
   for (const rule of rules) {
+    if (!rule.enabled || rule.dryRun) continue
     const raises = rule.actions.flatMap((a) =>
-      a.type === 'notification' ? [`notifications.${a.pathSuffix}`] : []
+      a.type === 'notification' && a.state !== 'normal'
+        ? [`notifications.${a.pathSuffix}`]
+        : []
     )
     for (const cond of rule.conditions) {
       if (cond.type !== 'notification') continue
@@ -175,17 +182,13 @@ function checkNotificationLoops(
         path: `/rules/${ri}/conditions/${ci}/path`,
         ruleId: rule.id
       }
-      if (loop === 'odd') {
-        errors.push({
-          ...issue,
-          message: `${cond.path} feeds back into itself through the notifications rules raise, and an inverted condition on the way would raise and clear it in a loop`
-        })
-      } else {
-        warnings.push({
-          ...issue,
-          message: `${cond.path} feeds back into itself through the notifications rules raise, so it can hold itself raised`
-        })
-      }
+      warnings.push({
+        ...issue,
+        message:
+          loop === 'odd'
+            ? `${cond.path} feeds back into itself through the notifications rules raise, and an inverted condition on the way can raise and clear it in a loop`
+            : `${cond.path} feeds back into itself through the notifications rules raise, so it can hold itself raised`
+      })
     })
   })
 }
