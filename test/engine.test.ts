@@ -640,6 +640,47 @@ describe('Engine — decisions across a restart and a reload', () => {
     expect(states(h.deltas)).toEqual(['alert'])
   })
 
+  it('keeps a rule on across a restart when it reads a notification another restored rule raises', async () => {
+    const RAISED = 'notifications.solar.high'
+    const DECK = 'electrical.switches.bank.10.5.state'
+    const raiser = waterHeaterRule({
+      actions: [
+        {
+          type: 'notification',
+          pathSuffix: 'solar.high',
+          state: 'alert',
+          method: ['visual'],
+          message: 'Solar high'
+        }
+      ]
+    })
+    const follower = waterHeaterRule({
+      id: 'bbbbbbbb-1111-2222-3333-444444444444',
+      conditions: [{ type: 'notification', path: RAISED, atLeast: 'alert' }],
+      actions: [{ type: 'setSwitch', path: DECK }]
+    })
+    h = harness({ [DECK]: 0 })
+    h.engine.start(doc(raiser, follower))
+    h.push(SOLAR, 5)
+    await flush()
+    // The server echoes the raised notification to its readers.
+    h.push(RAISED, {
+      state: 'alert',
+      method: ['visual'],
+      message: 'Solar high'
+    })
+    await flush()
+    expect(h.puts).toEqual([{ path: DECK, value: 1 }])
+
+    // A server restart drops every notification.
+    delete h.model[RAISED]
+    h.clock.advance(60_000)
+    restart([raiser, follower])
+    await flush()
+    expect(h.puts).toEqual([])
+    expect(h.engine.getState().rules[1]?.decision).toBe('on')
+  })
+
   it('raises a notification once for a rule that turns on at the start', async () => {
     h = harness({ [STARTER]: 0, [SOC]: 0.35 })
     h.engine.start(doc(genRule()))

@@ -26,6 +26,7 @@ import {
   type PutFn
 } from './actions.js'
 import { SunTracker } from './sun.js'
+import { notificationState } from './shared/notifications.js'
 import type { PersistedDecision, RulesStore } from './store.js'
 
 const POSITION_PATH = 'navigation.position'
@@ -237,10 +238,35 @@ export class Engine {
     this.doc = doc
 
     this.rebuildSubscriptions()
+    this.seedRestoredNotifications(restoredOn)
     for (const t of this.tracked.values()) this.evaluateRule(t)
     this.persistRuntimeState()
     this.updateStatus()
     return restoredOn
+  }
+
+  /** A rule restored 'on' raises its notifications again only after the
+   *  first evaluation, and a server restart has dropped them meanwhile.
+   *  A rule reading one of them must not see it cleared in between, or
+   *  it would turn off and on again and flip its outputs. */
+  private seedRestoredNotifications(restoredOn: readonly TrackedRule[]): void {
+    for (const t of restoredOn) {
+      if (t.rule.dryRun) continue
+      for (const action of t.rule.actions) {
+        if (action.type !== 'notification') continue
+        const path = `notifications.${action.pathSuffix}`
+        if (!this.subscriptions.has(path)) continue
+        if (notificationState(this.inputs.get(path)?.value) !== null) continue
+        this.inputs.set(path, {
+          value: {
+            state: action.state,
+            method: [...action.method],
+            message: action.message
+          },
+          receivedAt: this.clock.wallMs()
+        })
+      }
+    }
   }
 
   /** Committed decisions worth carrying over, by rule id. */
