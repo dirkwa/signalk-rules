@@ -14,6 +14,7 @@ export interface PathInfo {
   displayName?: string
   units?: string
   description?: string
+  supportsPut?: boolean
   lastValueKind: ValueKind
   /** Value captured from the one-shot snapshot at load time. */
   snapshotValue?: unknown
@@ -46,8 +47,8 @@ export const useMetaStore = create<MetaState>()((set, get) => ({
       const paths: Record<string, PathInfo> = {}
       const add = (path: string): void => {
         if (path === '') return
-        const m = meta[path]
         const k = kinds.get(path)
+        const m = meta[path] ?? k?.meta
         paths[path] = {
           path,
           displayName:
@@ -57,6 +58,7 @@ export const useMetaStore = create<MetaState>()((set, get) => ({
           units: typeof m?.units === 'string' ? m.units : undefined,
           description:
             typeof m?.description === 'string' ? m.description : undefined,
+          supportsPut: m?.supportsPut === true ? true : undefined,
           lastValueKind: k?.kind ?? 'unknown',
           snapshotValue: k?.value
         }

@@ -50,7 +50,9 @@ Classic use cases, each a one-minute setup:
 
 Actions go through normal Signal K PUTs, so any switching backend that
 registers action handlers works (e.g. `signalk-n2k-switching` for
-NMEA 2000 relay banks). Rules can additionally raise
+NMEA 2000 relay banks). The editor offers every path that takes a PUT
+as an output, and every on/off value (`true`/`false`, such as a
+Zigbee motion sensor) as a switch input. Rules can additionally raise
 `notifications.*` with a chosen state and message.
 
 A rule can also react to a notification another plugin raises: *WHEN

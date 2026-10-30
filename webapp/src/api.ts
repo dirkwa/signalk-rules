@@ -60,6 +60,7 @@ export interface PathMeta {
   displayName?: string
   units?: string
   description?: string
+  supportsPut?: boolean
 }
 
 /** All self meta keyed by dotted path — the displayName source. */

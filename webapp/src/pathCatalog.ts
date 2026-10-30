@@ -1,18 +1,24 @@
 import { SK_PATH_PATTERN } from '../../src/shared/schemas'
+import type { PathMeta } from './api'
 
+/** `switch`: an on/off input; `output`: something a PUT can switch. */
 export type PickerKind =
-  'switch' | 'numeric' | 'string' | 'notification' | 'any'
+  'switch' | 'output' | 'numeric' | 'string' | 'notification' | 'any'
 
 export type ValueKind = 'number' | 'string' | 'boolean' | 'object' | 'unknown'
 
 export interface SnapshotLeaf {
   kind: ValueKind
   value: unknown
+  /** The node's own meta, for when the bulk meta request fails. */
+  meta?: PathMeta
 }
 
 export interface KnownPath {
   path: string
   lastValueKind: ValueKind
+  /** Set in the path's meta by the plugin that handles PUTs on it. */
+  supportsPut?: boolean
 }
 
 const SWITCH_RE = /^electrical\.switches\..*\.state$/
@@ -49,7 +55,15 @@ function walk(
   const obj = node as Record<string, unknown>
   const valued = 'value' in obj && 'timestamp' in obj
   if (valued && prefix !== '') {
-    out.set(prefix, { kind: kindOf(obj['value']), value: obj['value'] })
+    const meta = obj['meta']
+    out.set(prefix, {
+      kind: kindOf(obj['value']),
+      value: obj['value'],
+      meta:
+        meta !== null && typeof meta === 'object'
+          ? (meta as PathMeta)
+          : undefined
+    })
   }
   // A valued node can still have children of its own, e.g.
   // environment.outside.pressure.threeHoursDelta beside the
@@ -75,7 +89,9 @@ export function matchesKind(info: KnownPath, kind: PickerKind): boolean {
   if (isNotification) return false
   switch (kind) {
     case 'switch':
-      return SWITCH_RE.test(info.path)
+      return SWITCH_RE.test(info.path) || info.lastValueKind === 'boolean'
+    case 'output':
+      return SWITCH_RE.test(info.path) || info.supportsPut === true
     case 'numeric':
       return info.lastValueKind === 'number' && !SWITCH_RE.test(info.path)
     case 'string':

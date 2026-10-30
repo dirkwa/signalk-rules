@@ -135,7 +135,7 @@ function ActionInputs({
       return (
         <>
           <PathButton
-            kind="switch"
+            kind="output"
             path={action.path}
             invalid={errorFields.has('path')}
             onChange={(path) => onChange({ ...action, path })}
@@ -171,7 +171,7 @@ function ActionInputs({
       return (
         <>
           <PathButton
-            kind="switch"
+            kind="output"
             path={action.path}
             invalid={errorFields.has('path')}
             onChange={(path) => onChange({ ...action, path })}
