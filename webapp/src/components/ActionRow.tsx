@@ -141,8 +141,23 @@ function ActionInputs({
             onChange={(path) => onChange({ ...action, path })}
           />
           <span className="hint">
-            follows the conditions (on when true, off when false)
+            {action.keepOn === true
+              ? 'switches on when true and stays on until switched off'
+              : 'follows the conditions (on when true, off when false)'}
           </span>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={action.keepOn === true}
+              onChange={(e) =>
+                onChange({
+                  ...action,
+                  keepOn: e.target.checked ? true : undefined
+                })
+              }
+            />
+            stay on
+          </label>
           {showAdvanced && (
             <span className="mini-field">
               on=
@@ -154,15 +169,19 @@ function ActionInputs({
                   onChange({ ...action, onValue: Number(e.target.value) })
                 }
               />
-              off=
-              <input
-                type="number"
-                className="input-small"
-                value={action.offValue ?? 0}
-                onChange={(e) =>
-                  onChange({ ...action, offValue: Number(e.target.value) })
-                }
-              />
+              {action.keepOn !== true && (
+                <>
+                  off=
+                  <input
+                    type="number"
+                    className="input-small"
+                    value={action.offValue ?? 0}
+                    onChange={(e) =>
+                      onChange({ ...action, offValue: Number(e.target.value) })
+                    }
+                  />
+                </>
+              )}
             </span>
           )}
         </>

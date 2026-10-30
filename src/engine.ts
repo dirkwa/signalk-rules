@@ -575,6 +575,7 @@ export class Engine {
     action: SetSwitchActionT,
     edge: 'rising' | 'falling'
   ): void {
+    if (edge === 'falling' && action.keepOn === true) return
     const desired =
       edge === 'rising'
         ? (action.onValue ?? DEFAULTS.setSwitchOn)
@@ -868,7 +869,9 @@ export class Engine {
         wouldDo.push(
           raw === 'unknown'
             ? `hold ${action.path} (missing data)`
-            : `set ${action.path} to ${desired}`
+            : raw === 'false' && action.keepOn === true
+              ? `leave ${action.path} as it is`
+              : `set ${action.path} to ${desired}`
         )
       } else if (action.type === 'pulse') {
         wouldDo.push(
