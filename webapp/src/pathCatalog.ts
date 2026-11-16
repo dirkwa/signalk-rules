@@ -1,4 +1,8 @@
-import { SK_PATH_PATTERN } from '../../src/shared/schemas'
+import {
+  SK_PATH_PATTERN,
+  type NumericConditionT,
+  type SwitchConditionT
+} from '../../src/shared/schemas'
 import type { PathMeta } from './api'
 
 /** `switch`: an on/off input; `output`: something a PUT can switch. */
@@ -93,11 +97,41 @@ export function matchesKind(info: KnownPath, kind: PickerKind): boolean {
     case 'output':
       return SWITCH_RE.test(info.path) || info.supportsPut === true
     case 'numeric':
-      return info.lastValueKind === 'number' && !SWITCH_RE.test(info.path)
+      // On/off values are listed too: someone looking for a motion
+      // sensor under "value compares" should find it, and picking one
+      // turns the condition into an on/off one (numericPathChosen).
+      return (
+        (info.lastValueKind === 'number' && !SWITCH_RE.test(info.path)) ||
+        info.lastValueKind === 'boolean'
+      )
     case 'string':
       return info.lastValueKind === 'string'
     case 'any':
       return true
+  }
+}
+
+/** A `true`/`false` value, read by a switch condition, not compared. */
+export function isOnOffValue(info: KnownPath | undefined): boolean {
+  return info?.lastValueKind === 'boolean'
+}
+
+/**
+ * The condition after a path is picked for a numeric one: an on/off
+ * value cannot be compared to a number, so it becomes "is on".
+ */
+export function numericPathChosen(
+  cond: NumericConditionT,
+  path: string,
+  info: KnownPath | undefined
+): NumericConditionT | SwitchConditionT {
+  if (!isOnOffValue(info)) return { ...cond, path }
+  return {
+    type: 'switch',
+    path,
+    equals: 1,
+    negate: cond.negate,
+    staleSeconds: cond.staleSeconds
   }
 }
 

@@ -186,7 +186,7 @@ export function RuleEditorPage({ ruleId, onBack }: RuleEditorPageProps) {
             className="btn"
             onClick={() => addCond('switch')}
           >
-            switch is…
+            switch or sensor is…
           </button>
           <button
             type="button"

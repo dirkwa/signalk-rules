@@ -3,10 +3,12 @@ import {
   freeEntryPath,
   hasChildren,
   matchesKind,
+  numericPathChosen,
   snapshotPaths,
   type KnownPath,
   type PickerKind
 } from './pathCatalog'
+import type { NumericConditionT } from '../../src/shared/schemas'
 
 const ts = '2026-10-04T15:00:00.000Z'
 
@@ -190,6 +192,15 @@ describe('matchesKind', () => {
     expect(matchesKind(motion, 'output')).toBe(false)
   })
 
+  it('also lists an on/off sensor where values are compared', () => {
+    const motion: KnownPath = {
+      path: 'zigbee.main.kujo.occupancy',
+      lastValueKind: 'boolean'
+    }
+    expect(matchesKind(motion, 'numeric')).toBe(true)
+    expect(matchesKind(motion, 'string')).toBe(false)
+  })
+
   it('lists any path that takes a PUT as an output', () => {
     const light: KnownPath = {
       path: 'zigbee.main.deckLight.state',
@@ -205,5 +216,43 @@ describe('matchesKind', () => {
     }
     expect(matchesKind(dimmer, 'output')).toBe(true)
     expect(matchesKind(dimmer, 'switch')).toBe(false)
+  })
+})
+
+describe('numericPathChosen', () => {
+  const cond: NumericConditionT = {
+    type: 'numeric',
+    path: 'navigation.speedOverGround',
+    operator: 'lt',
+    threshold: 0.514,
+    negate: true,
+    staleSeconds: 30
+  }
+
+  it('turns an on/off sensor into an "is true" condition', () => {
+    const occupancy = 'zigbee.main.kujo.occupancy'
+    expect(
+      numericPathChosen(cond, occupancy, {
+        path: occupancy,
+        lastValueKind: 'boolean'
+      })
+    ).toEqual({
+      type: 'switch',
+      path: occupancy,
+      equals: 1,
+      negate: true,
+      staleSeconds: 30
+    })
+  })
+
+  it('keeps the comparison for a number or an unseen path', () => {
+    const depth = 'environment.depth.belowKeel'
+    expect(
+      numericPathChosen(cond, depth, { path: depth, lastValueKind: 'number' })
+    ).toEqual({ ...cond, path: depth })
+    expect(numericPathChosen(cond, depth, undefined)).toEqual({
+      ...cond,
+      path: depth
+    })
   })
 })
