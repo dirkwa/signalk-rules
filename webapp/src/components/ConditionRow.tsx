@@ -2,7 +2,8 @@ import {
   RAISED_STATES,
   type ConditionT,
   type NotificationConditionT,
-  type NumericConditionT
+  type NumericConditionT,
+  type SwitchConditionT
 } from '../../../src/shared/schemas'
 import type { ConditionState } from '../../../src/shared/state-types'
 import { LiveValue } from './LiveValue'
@@ -10,6 +11,7 @@ import { NumberWithUnit } from './NumberWithUnit'
 import { PathButton } from './PathPicker'
 import { useMetaStore } from '../stores/metaStore'
 import { unitFor } from '../unitConvert'
+import { isOnOffValue, numericPathChosen } from '../pathCatalog'
 
 const OPERATOR_LABELS: Record<NumericConditionT['operator'], string> = {
   gt: 'is above',
@@ -127,7 +129,15 @@ function ConditionInputs({
             kind="numeric"
             path={cond.path}
             invalid={errorFields.has('path')}
-            onChange={(path) => onChange({ ...cond, path })}
+            onChange={(path) =>
+              onChange(
+                numericPathChosen(
+                  cond,
+                  path,
+                  useMetaStore.getState().paths[path]
+                )
+              )
+            }
           />
           <select
             value={cond.operator}
@@ -154,27 +164,11 @@ function ConditionInputs({
       )
     case 'switch':
       return (
-        <>
-          <PathButton
-            kind="switch"
-            path={cond.path}
-            invalid={errorFields.has('path')}
-            onChange={(path) => onChange({ ...cond, path })}
-          />
-          <span>is</span>
-          <select
-            value={cond.equals}
-            onChange={(e) =>
-              onChange({
-                ...cond,
-                equals: Number(e.target.value) === 1 ? 1 : 0
-              })
-            }
-          >
-            <option value={1}>on</option>
-            <option value={0}>off</option>
-          </select>
-        </>
+        <SwitchInputs
+          cond={cond}
+          onChange={onChange}
+          errorFields={errorFields}
+        />
       )
     case 'string':
       return (
@@ -310,5 +304,42 @@ function HysteresisInput({
         <span className="hint"> {u.display}</span>
       )}
     </label>
+  )
+}
+
+function SwitchInputs({
+  cond,
+  onChange,
+  errorFields
+}: {
+  cond: SwitchConditionT
+  onChange(next: ConditionT): void
+  errorFields: Set<string>
+}) {
+  // A sensor reports true/false; calling that on/off would not match
+  // what the Data Browser shows for it.
+  const onOff = useMetaStore((s) => isOnOffValue(s.paths[cond.path]))
+  return (
+    <>
+      <PathButton
+        kind="switch"
+        path={cond.path}
+        invalid={errorFields.has('path')}
+        onChange={(path) => onChange({ ...cond, path })}
+      />
+      <span>is</span>
+      <select
+        value={cond.equals}
+        onChange={(e) =>
+          onChange({
+            ...cond,
+            equals: Number(e.target.value) === 1 ? 1 : 0
+          })
+        }
+      >
+        <option value={1}>{onOff ? 'true' : 'on'}</option>
+        <option value={0}>{onOff ? 'false' : 'off'}</option>
+      </select>
+    </>
   )
 }
