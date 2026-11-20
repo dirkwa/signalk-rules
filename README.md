@@ -74,6 +74,24 @@ the clearing notification keeps the text it was raised with. Braces
 around anything else, including a path no condition reads, stay as
 written; the editor warns about the latter.
 
+## Several servers on one boat
+
+With [Multihelm](https://github.com/dirkwa/signalk-multihelm) pairing
+the boat's servers, Rules runs on each of them but only the master
+switches; the others leave every output alone and their Dashboard says
+so. Rules edited on any server reach all of them.
+
+When another server becomes the master (by hand, or by taking over
+while the master is gone), it measures every rule against the switches
+as they are, sends nothing where a switch already agrees, and lets each
+pulse wait out its cooldown, since the server before may just have
+fired it. The server that hands over stops switching, reverts a pulse
+in flight and clears the notifications it raised.
+
+While Multihelm is enabled but has not said which server is the
+master, or finds none, no server runs the rules. Disabling Multihelm
+on a server makes that one run them alone again.
+
 ## Webapp
 
 The **Rules** webapp (Webapps section of the server UI) provides:

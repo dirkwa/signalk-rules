@@ -20,6 +20,17 @@ export function DashboardPage() {
       </div>
     )
   }
+  if (engine.standby !== undefined) {
+    return (
+      <div className="page">
+        <div className="banner banner-warn">
+          {engine.standby === 'member'
+            ? "Another of the boat's servers runs the rules; see its dashboard. Rules edited here reach every server."
+            : "Waiting for Multihelm to say which of the boat's servers runs the rules."}
+        </div>
+      </div>
+    )
+  }
   if (engine.rules.length === 0) {
     return <div className="page">No rules yet — create one under Rules.</div>
   }

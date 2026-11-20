@@ -279,6 +279,12 @@ export class PulseManager {
     return Math.max(0, last + cooldownSeconds * 1000 - this.deps.wallMs())
   }
 
+  armCooldowns(ruleIds: readonly string[]): void {
+    for (const ruleId of ruleIds) {
+      this.lastPulseAtWall.set(ruleId, this.deps.wallMs())
+    }
+  }
+
   markFired(ruleId: string): void {
     this.lastPulseAtWall.set(ruleId, this.deps.wallMs())
     this.deps.persist()

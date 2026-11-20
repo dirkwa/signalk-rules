@@ -157,16 +157,30 @@ export class Engine {
     })
   }
 
-  start(doc: RulesDocT): void {
+  /** `takeOver`: this server takes the rules over from another one,
+   *  whose decisions it does not know. Its own saved decisions may be
+   *  hours old, so every rule measures against the switches afresh, and
+   *  a pulse waits out its cooldown as if it had just fired there. */
+  start(doc: RulesDocT, opts: { takeOver?: boolean } = {}): void {
     this.startedAtWall = this.clock.wallMs()
     const saved = this.deps.store.loadRuntimeState()
     this.pulses.loadLastPulses(saved.lastPulseAt)
+    if (opts.takeOver === true) {
+      this.pulses.armCooldowns(
+        doc.rules
+          .filter((r) => r.actions.some((a) => a.type === 'pulse'))
+          .map((r) => r.id)
+      )
+    }
     if (saved.lastPosition) this.sun.setPosition(saved.lastPosition)
     // Fail-safe first: a pulse record on disk means a previous run died
     // mid-pulse. Revert before evaluating anything.
     this.pulses.restoreAndRevert(saved.pulses)
 
-    const restoredOn = this.install(doc, saved.decisions)
+    const restoredOn = this.install(
+      doc,
+      opts.takeOver === true ? {} : saved.decisions
+    )
     // A server restart drops every notification, so a rule that comes
     // back 'on' raises its own again. Switches keep their state, and a
     // pulse already fired. One that turned off on its first evaluation
@@ -312,6 +326,13 @@ export class Engine {
     for (const unsub of this.subscriptions.values()) unsub()
     this.subscriptions.clear()
     this.persistRuntimeState()
+  }
+
+  /** Another server runs the rules from now on: clear what this one
+   *  raised, since it can no longer clear it. */
+  standDown(): void {
+    for (const t of this.tracked.values()) this.emitNotificationClear(t)
+    this.stop()
   }
 
   tick(): void {

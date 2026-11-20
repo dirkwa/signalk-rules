@@ -6,6 +6,17 @@ import { dirname, join } from 'node:path'
 import { Engine } from './engine.js'
 import { RulesStore } from './store.js'
 import { registerApiRoutes } from './api.js'
+import {
+  followMultihelm,
+  rulesDataset,
+  type Mode,
+  type MultihelmFollower,
+  type MultihelmHost
+} from './multihelm.js'
+import { EMPTY_RULES_DOC, type RulesDocT } from './shared/schemas.js'
+
+const runsRules = (mode: Mode): boolean =>
+  mode === 'standalone' || mode === 'master'
 
 const PLUGIN_ID = 'signalk-rules'
 
@@ -40,6 +51,10 @@ interface PluginConfig {
 const plugin = (app: ServerAPI): Plugin => {
   let engine: Engine | null = null
   let store: RulesStore | null = null
+  let doc: RulesDocT = EMPTY_RULES_DOC
+  let mode: Mode = 'waiting'
+  let follower: MultihelmFollower | null = null
+  let startedAt = 0
 
   return {
     id: PLUGIN_ID,
@@ -77,14 +92,20 @@ const plugin = (app: ServerAPI): Plugin => {
 
     start: (config: object) => {
       const cfg = config as PluginConfig
-      store = new RulesStore(app.getDataDirPath())
-      engine = new Engine(
-        {
-          tickSeconds: cfg.tickSeconds ?? 1,
-          defaultStaleSeconds: cfg.defaultStaleSeconds ?? 300,
-          verbose: cfg.verboseLog ?? false
-        },
-        {
+      const engineConfig = {
+        tickSeconds: cfg.tickSeconds ?? 1,
+        defaultStaleSeconds: cfg.defaultStaleSeconds ?? 300,
+        verbose: cfg.verboseLog ?? false
+      }
+      const rulesStore = new RulesStore(app.getDataDirPath())
+      store = rulesStore
+      const loaded = rulesStore.loadRules()
+      if (loaded.error !== undefined) app.setPluginError(loaded.error)
+      doc = loaded.doc
+      startedAt = Date.now()
+
+      const runEngine = (takeOver: boolean): void => {
+        engine = new Engine(engineConfig, {
           subscribe: (path, cb) =>
             app.streambundle
               .getSelfBus(path as Path)
@@ -110,18 +131,53 @@ const plugin = (app: ServerAPI): Plugin => {
           setStatus: (msg) => app.setPluginStatus(msg),
           setError: (msg) => app.setPluginError(msg),
           debug: (msg) => app.debug(msg),
-          store
+          store: rulesStore
+        })
+        engine.start(doc, { takeOver })
+      }
+
+      const setMode = (next: Mode): void => {
+        const wasRunning = runsRules(mode)
+        mode = next
+        if (wasRunning && !runsRules(next)) {
+          engine?.standDown()
+          engine = null
+        } else if (!wasRunning && runsRules(next)) {
+          // Under Multihelm another server may have run the rules until now.
+          runEngine(next === 'master')
         }
+        if (next === 'member') {
+          app.setPluginStatus("Another of the boat's servers runs the rules")
+        } else if (next === 'waiting') {
+          app.setPluginStatus(
+            'Waiting for Multihelm to say which server runs the rules'
+          )
+        }
+      }
+
+      mode = 'waiting'
+      follower = followMultihelm(
+        app as MultihelmHost,
+        rulesDataset({
+          rulesFile: () => rulesStore.rulesFile(),
+          rulesReplaced: (next) => {
+            doc = next
+            engine?.reload(next)
+            app.debug('rules taken over from another server')
+          }
+        }),
+        setMode,
+        { debug: (msg) => app.debug(msg), error: (msg) => app.error(msg) }
       )
-      const { doc, error } = store.loadRules()
-      if (error !== undefined) app.setPluginError(error)
-      engine.start(doc)
     },
 
     stop: () => {
+      follower?.stop()
+      follower = null
       engine?.stop()
       engine = null
       store = null
+      mode = 'waiting'
     },
 
     registerWithRouter: (router: IRouter) => {
@@ -130,6 +186,22 @@ const plugin = (app: ServerAPI): Plugin => {
         version,
         getEngine: () => engine,
         getStore: () => store,
+        getDoc: () => doc,
+        standbyState: () => ({
+          rules: [],
+          tickSeconds: 0,
+          defaultStaleSeconds: 0,
+          inputCount: 0,
+          staleInputCount: 0,
+          now: Date.now(),
+          startedAt,
+          standby: mode === 'member' ? 'member' : 'waiting'
+        }),
+        rulesSaved: (next) => {
+          doc = next
+          engine?.reload(next)
+          follower?.changed()
+        },
         onError: (msg) => app.setPluginError(msg)
       })
     }
