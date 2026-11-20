@@ -1139,6 +1139,30 @@ describe('Engine — taking the rules over from another server', () => {
     expect(rule?.lastActions[0]?.kind).toBe('skippedAlreadySet')
   })
 
+  it('keeps reverting a pulse after it stood down until the revert goes through', async () => {
+    let refused = 0
+    h = harness(
+      { [STARTER]: 0 },
+      {
+        reply: (p) =>
+          p === STARTER && h.model[STARTER] === 1 && refused++ === 0
+            ? Promise.reject(new Error('bus busy'))
+            : undefined
+      }
+    )
+    h.engine.start(doc(genRule()))
+    h.push(SOC, 0.2)
+    await flush()
+    expect(h.puts).toEqual([{ path: STARTER, value: 1 }])
+
+    h.engine.standDown()
+    await flush()
+    expect(h.model[STARTER]).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.model[STARTER]).toBe(0)
+    expect(new RulesStore(h.dir).loadRuntimeState().pulses).toEqual([])
+  })
+
   it('clears what it raised when it stands down', async () => {
     h = harness({ [STARTER]: 0 })
     h.engine.start(doc(genRule()))

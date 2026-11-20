@@ -332,7 +332,18 @@ export class Engine {
    *  raised, since it can no longer clear it. */
   standDown(): void {
     for (const t of this.tracked.values()) this.emitNotificationClear(t)
-    this.stop()
+    if (this.ticker !== null) clearInterval(this.ticker)
+    this.ticker = null
+    this.pulses.revertAllUntilDone()
+    this.putExec.dispose()
+    for (const unsub of this.subscriptions.values()) unsub()
+    this.subscriptions.clear()
+    this.persistRuntimeState()
+  }
+
+  /** Stops the reverts a stand-down left running; their records stay on disk. */
+  abandonReverts(): void {
+    this.pulses.abandonReverts()
   }
 
   tick(): void {

@@ -10,6 +10,7 @@ import { validateRulesDoc } from './shared/validate.js'
 export const MULTIHELM_PROPERTY = 'multihelm'
 export const MULTIHELM_PLUGIN_ID = 'signalk-multihelm'
 const MULTIHELM_API_VERSION = 1
+const PLUGIN_LIST_RETRY_MS = 30_000
 
 export type Role = 'master' | 'member'
 
@@ -171,6 +172,8 @@ export function followMultihelm(
     api = null
   }
 
+  let retry: NodeJS.Timeout | null = null
+
   const askWhetherEnabled = (): void => {
     const asked = ++generation
     onMode('waiting')
@@ -179,16 +182,26 @@ export function followMultihelm(
       onMode('standalone')
       return
     }
-    list
-      .call(app)
-      .then((plugins) =>
-        plugins.some((p) => p.id === MULTIHELM_PLUGIN_ID && p.enabled)
-      )
-      .catch(() => false)
-      .then((enabled) => {
-        if (!stopped && asked === generation && !enabled) onMode('standalone')
-      })
-      .catch(() => undefined)
+    const current = (): boolean => !stopped && asked === generation
+    list.call(app).then(
+      (plugins) => {
+        const enabled = plugins.some(
+          (p) => p.id === MULTIHELM_PLUGIN_ID && p.enabled
+        )
+        if (current() && !enabled) onMode('standalone')
+      },
+      (err: unknown) => {
+        if (!current()) return
+        // Not knowing whether Multihelm runs, running alone could switch beside a master.
+        log.error(
+          `cannot tell whether Multihelm is enabled, asking again: ${err instanceof Error ? err.message : String(err)}`
+        )
+        retry = setTimeout(() => {
+          retry = null
+          if (current()) askWhetherEnabled()
+        }, PLUGIN_LIST_RETRY_MS)
+      }
+    )
   }
 
   const unsubscribe = app.onPropertyValues(MULTIHELM_PROPERTY, (values) => {
@@ -222,6 +235,7 @@ export function followMultihelm(
     changed: () => handle?.changed(),
     stop: () => {
       stopped = true
+      if (retry !== null) clearTimeout(retry)
       unsubscribe()
       release()
     }

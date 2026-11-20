@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -142,6 +142,40 @@ describe('who runs the rules', () => {
     s.stop()
     await settle()
     expect(modes).toEqual(['member', 'waiting', 'standalone'])
+  })
+
+  it('keeps waiting, and asks again, when the plugin list cannot be read', async () => {
+    vi.useFakeTimers()
+    try {
+      const modes: Mode[] = []
+      const errors: string[] = []
+      let calls = 0
+      const app = {
+        onPropertyValues: (
+          _name: string,
+          cb: (values: ({ value: unknown } | undefined)[]) => void
+        ) => {
+          cb([undefined])
+          return () => undefined
+        },
+        getPluginsList: () =>
+          ++calls === 1
+            ? Promise.reject(new Error('not ready'))
+            : Promise.resolve([{ id: 'signalk-multihelm', enabled: false }])
+      }
+      followMultihelm(app, dataset, (m) => modes.push(m), {
+        debug: () => undefined,
+        error: (msg) => errors.push(msg)
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(modes).toEqual(['waiting'])
+      expect(errors).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(modes).toEqual(['waiting', 'waiting', 'standalone'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not act on a plugin list that answers after Multihelm started', async () => {

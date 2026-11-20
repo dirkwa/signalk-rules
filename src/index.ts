@@ -50,6 +50,8 @@ interface PluginConfig {
  */
 const plugin = (app: ServerAPI): Plugin => {
   let engine: Engine | null = null
+  /** The last engine to stand down, while its pulse reverts may still retry. */
+  let steppedDown: Engine | null = null
   let store: RulesStore | null = null
   let doc: RulesDocT = EMPTY_RULES_DOC
   let mode: Mode = 'waiting'
@@ -105,7 +107,10 @@ const plugin = (app: ServerAPI): Plugin => {
       startedAt = Date.now()
 
       const runEngine = (takeOver: boolean): void => {
-        engine = new Engine(engineConfig, {
+        // The new engine reverts any pulse still on disk itself.
+        steppedDown?.abandonReverts()
+        steppedDown = null
+        const started = new Engine(engineConfig, {
           subscribe: (path, cb) =>
             app.streambundle
               .getSelfBus(path as Path)
@@ -133,19 +138,30 @@ const plugin = (app: ServerAPI): Plugin => {
           debug: (msg) => app.debug(msg),
           store: rulesStore
         })
-        engine.start(doc, { takeOver })
+        try {
+          started.start(doc, { takeOver })
+          engine = started
+        } catch (err) {
+          started.stop()
+          app.setPluginError(
+            `cannot start the rules: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+      }
+
+      const standDown = (): void => {
+        engine?.standDown()
+        steppedDown = engine
+        engine = null
       }
 
       const setMode = (next: Mode): void => {
-        const wasRunning = runsRules(mode)
+        // A server running alone that Multihelm now makes the master
+        // takes over like any other: another may have run the rules.
+        const takesOver = mode === 'standalone' && next === 'master'
         mode = next
-        if (wasRunning && !runsRules(next)) {
-          engine?.standDown()
-          engine = null
-        } else if (!wasRunning && runsRules(next)) {
-          // Under Multihelm another server may have run the rules until now.
-          runEngine(next === 'master')
-        }
+        if (!runsRules(next) || takesOver) standDown()
+        if (runsRules(next) && engine === null) runEngine(next === 'master')
         if (next === 'member') {
           app.setPluginStatus("Another of the boat's servers runs the rules")
         } else if (next === 'waiting') {
@@ -174,6 +190,8 @@ const plugin = (app: ServerAPI): Plugin => {
     stop: () => {
       follower?.stop()
       follower = null
+      steppedDown?.abandonReverts()
+      steppedDown = null
       engine?.stop()
       engine = null
       store = null

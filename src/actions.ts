@@ -227,6 +227,7 @@ const REVERT_RETRY_MS = 5000
 export class PulseManager {
   private readonly active = new Map<string, ActivePulse>()
   private readonly lastPulseAtWall = new Map<string, number>()
+  private abandoned = false
 
   constructor(private readonly deps: PulseManagerDeps) {}
 
@@ -408,6 +409,66 @@ export class PulseManager {
         this.revert(pulse, reason)
       }, REVERT_RETRY_MS)
     })
+  }
+
+  /**
+   * Another server runs the rules from now on, and this one starts no
+   * engine that would revert from disk: revert every pulse directly and
+   * keep trying until each went through, or `abandonReverts()`.
+   */
+  revertAllUntilDone(): void {
+    for (const pulse of this.active.values()) {
+      if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
+      if (pulse.revertRetryTimer !== null) clearTimeout(pulse.revertRetryTimer)
+      pulse.pulseTimer = null
+      pulse.revertRetryTimer = null
+      this.revertDirect(pulse)
+    }
+  }
+
+  /** A new engine takes the records over from disk, or the plugin stops. */
+  abandonReverts(): void {
+    this.abandoned = true
+    for (const pulse of this.active.values()) {
+      if (pulse.revertRetryTimer !== null) clearTimeout(pulse.revertRetryTimer)
+      pulse.revertRetryTimer = null
+    }
+  }
+
+  private revertDirect(pulse: ActivePulse): void {
+    pulse.reverting = true
+    const key = this.key(pulse.ruleId, pulse.target)
+    let settled = false
+    const settle = (ok: boolean, detail?: string): void => {
+      if (settled || this.abandoned || this.active.get(key) !== pulse) return
+      settled = true
+      if (ok) {
+        this.active.delete(key)
+        this.deps.persist()
+        return
+      }
+      this.deps.log(
+        `pulse revert ${pulse.target} -> ${pulse.revertValue} failed (${detail ?? ''}), retrying`
+      )
+      pulse.revertRetryTimer = setTimeout(() => {
+        pulse.revertRetryTimer = null
+        this.revertDirect(pulse)
+      }, REVERT_RETRY_MS)
+    }
+    const onReply = (reply?: unknown): void => {
+      const terminal = isTerminalReply(reply)
+      if (terminal === null) settle(true)
+      else settle(terminal.ok, terminal.detail)
+    }
+    try {
+      this.deps
+        .putDirect(pulse.target, pulse.revertValue, () => undefined)
+        .then(onReply, (err: unknown) => {
+          settle(false, err instanceof Error ? err.message : String(err))
+        })
+    } catch (err) {
+      settle(false, err instanceof Error ? err.message : String(err))
+    }
   }
 
   /**

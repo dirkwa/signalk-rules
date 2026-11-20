@@ -86,7 +86,8 @@ a sentence-style web UI. Two halves in one npm package:
     engine runs alone, under it only while the role is `master`, and
     not at all while Multihelm has not said. A server that becomes the
     master starts with `takeOver`: no saved decisions, pulse cooldowns
-    armed. One that stops being it calls `standDown()`. `rules.json`
+    armed. One that stops being it calls `standDown()`, whose pulse
+    reverts retry until they go through. `rules.json`
     is the `signalk-rules/rules` dataset, put in place byte for byte.
 
 ## REST API (`src/api.ts`)
