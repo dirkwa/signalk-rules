@@ -143,9 +143,12 @@ interface PulseHarness {
   events: string[]
   records: Array<{ ruleId: string; rec: ActionRecord }>
   failNext: { count: number }
+  putExec: PutExecutor
 }
 
-function pulseHarness(): PulseHarness {
+function pulseHarness(
+  opts: { direct?: PutFn; minIntervalMs?: number } = {}
+): PulseHarness {
   const putCalls: Array<{ path: string; value: unknown }> = []
   const directCalls: Array<{ path: string; value: unknown }> = []
   const events: string[] = []
@@ -160,11 +163,14 @@ function pulseHarness(): PulseHarness {
     }
     return okReply
   }
-  const putDirect: PutFn = async (path, value) => {
+  const putDirect: PutFn = async (path, value, cb) => {
     directCalls.push({ path, value })
-    return okReply
+    return opts.direct ? opts.direct(path, value, cb) : okReply
   }
-  const putExec = new PutExecutor(put, { monoMs: () => mono, minIntervalMs: 0 })
+  const putExec = new PutExecutor(put, {
+    monoMs: () => mono,
+    minIntervalMs: opts.minIntervalMs ?? 0
+  })
   const pulses = new PulseManager({
     putExec,
     putDirect,
@@ -174,7 +180,7 @@ function pulseHarness(): PulseHarness {
     log: () => undefined,
     onRecord: (ruleId, rec) => records.push({ ruleId, rec })
   })
-  return { pulses, putCalls, directCalls, events, records, failNext }
+  return { pulses, putCalls, directCalls, events, records, failNext, putExec }
 }
 
 describe('PulseManager', () => {
@@ -262,6 +268,67 @@ describe('PulseManager', () => {
     ])
     await flush()
     expect(h.putCalls).toEqual([{ path: 'sw', value: 0 }])
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('after a stand-down, waits for the final reply of a pending revert and retries a failed one', async () => {
+    let attempt = 0
+    const h = pulseHarness({
+      direct: (_path, _value, cb) => {
+        attempt++
+        if (attempt === 1) setTimeout(() => cb(failReply), 1000)
+        return Promise.resolve(
+          attempt === 1 ? { state: 'PENDING', statusCode: 202 } : okReply
+        )
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    await advance(1000)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('after a stand-down, tries again when a pending revert never gets its final reply', async () => {
+    let attempt = 0
+    const h = pulseHarness({
+      direct: () =>
+        Promise.resolve(
+          ++attempt === 1 ? { state: 'PENDING', statusCode: 202 } : okReply
+        )
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    await advance(25_000)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('keeps the record of a stood-down pulse whose ON-PUT was still queued', async () => {
+    let attempt = 0
+    const h = pulseHarness({
+      minIntervalMs: 2000,
+      direct: () =>
+        ++attempt === 1
+          ? Promise.reject(new Error('bus busy'))
+          : Promise.resolve(okReply)
+    })
+    h.putExec.request('sw', 0, () => undefined)
+    await flush()
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 

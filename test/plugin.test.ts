@@ -50,14 +50,27 @@ function fakeServer(opts: { multihelmEnabled: boolean; dataDir?: string }) {
   const history: ({ value: unknown } | undefined)[] = [undefined]
   const listeners: ((v: typeof history) => void)[] = []
   const errors: string[] = []
+  const bus = new Map<string, (v: { value: unknown }) => void>()
+  const puts: { path: string; value: unknown }[] = []
+  const failReverts = { on: false }
   let roleCb: ((role: string) => void) | null = null
   const app = {
     getDataDirPath: () => dir,
     streambundle: {
-      getSelfBus: () => ({ onValue: () => () => undefined })
+      getSelfBus: (p: string) => ({
+        onValue: (cb: (v: { value: unknown }) => void) => {
+          bus.set(p, cb)
+          return () => bus.delete(p)
+        }
+      })
     },
     getSelfPath: () => undefined,
-    putSelfPath: () => Promise.resolve({ state: 'COMPLETED', statusCode: 200 }),
+    putSelfPath: (p: string, value: unknown) => {
+      puts.push({ path: p, value })
+      return value === 0 && failReverts.on
+        ? Promise.reject(new Error('bus busy'))
+        : Promise.resolve({ state: 'COMPLETED', statusCode: 200 })
+    },
     handleMessage: () => undefined,
     setPluginStatus: () => undefined,
     setPluginError: (msg: string) => errors.push(msg),
@@ -95,6 +108,13 @@ function fakeServer(opts: { multihelmEnabled: boolean; dataDir?: string }) {
       for (const cb of listeners) cb(history)
     },
     role: (r: string) => roleCb?.(r),
+    multihelmStops() {
+      history.push({ value: { apiVersion: 1 } })
+      for (const cb of listeners) cb(history)
+    },
+    push: (p: string, value: unknown) => bus.get(p)?.({ value }),
+    puts,
+    failReverts,
     lastPulseAt: (): Record<string, number> =>
       (
         JSON.parse(
@@ -150,6 +170,35 @@ describe('the plugin and Multihelm', () => {
       expect(s.lastPulseAt()[GEN_RULE_ID]).toBeTypeOf('number')
       s.role('member')
       void p.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('a pulse a server stood down from', () => {
+  it('stops retrying its revert when the plugin stops, also after Multihelm went away', async () => {
+    vi.useFakeTimers()
+    try {
+      const s = fakeServer({ multihelmEnabled: true })
+      s.multihelmStarts('master')
+      const p = plugin(s.app)
+      p.start({}, () => undefined)
+      await vi.advanceTimersByTimeAsync(0)
+      // The takeover armed the cooldown; let it pass.
+      await vi.advanceTimersByTimeAsync(1800_000)
+      s.push('electrical.batteries.60.capacity.stateOfCharge', 0.2)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(s.puts.at(-1)?.value).toBe(1)
+
+      s.failReverts.on = true
+      s.role('member')
+      s.multihelmStops()
+      await vi.advanceTimersByTimeAsync(0)
+      void p.stop()
+      const tried = s.puts.length
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(s.puts.length).toBe(tried)
     } finally {
       vi.useRealTimers()
     }

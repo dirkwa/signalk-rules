@@ -217,6 +217,7 @@ export interface PulseManagerDeps {
 }
 
 const REVERT_RETRY_MS = 5000
+const REVERT_REPLY_TIMEOUT_MS = 25_000
 
 /**
  * Owns active pulses and the per-rule cooldown clock. The revert is the
@@ -335,6 +336,8 @@ export class PulseManager {
       const current = this.active.get(key)
       if (current !== pulse) return
       if (!ok) {
+        // A revert under way, started by a stand-down, owns the record and deletes it on success.
+        if (pulse.reverting) return
         // Never energized: no revert needed. Cooldown stays consumed —
         // under-firing a starter is safer than double-firing it.
         if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
@@ -439,9 +442,16 @@ export class PulseManager {
     pulse.reverting = true
     const key = this.key(pulse.ruleId, pulse.target)
     let settled = false
+    // A PENDING reply ends in the update callback; one that never comes is a failure.
+    const noReply = setTimeout(() => {
+      settle(false, 'no reply')
+    }, REVERT_REPLY_TIMEOUT_MS)
+    noReply.unref?.()
     const settle = (ok: boolean, detail?: string): void => {
-      if (settled || this.abandoned || this.active.get(key) !== pulse) return
+      if (settled) return
       settled = true
+      clearTimeout(noReply)
+      if (this.abandoned || this.active.get(key) !== pulse) return
       if (ok) {
         this.active.delete(key)
         this.deps.persist()
@@ -457,12 +467,11 @@ export class PulseManager {
     }
     const onReply = (reply?: unknown): void => {
       const terminal = isTerminalReply(reply)
-      if (terminal === null) settle(true)
-      else settle(terminal.ok, terminal.detail)
+      if (terminal !== null) settle(terminal.ok, terminal.detail)
     }
     try {
       this.deps
-        .putDirect(pulse.target, pulse.revertValue, () => undefined)
+        .putDirect(pulse.target, pulse.revertValue, onReply)
         .then(onReply, (err: unknown) => {
           settle(false, err instanceof Error ? err.message : String(err))
         })

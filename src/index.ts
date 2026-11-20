@@ -150,7 +150,10 @@ const plugin = (app: ServerAPI): Plugin => {
       }
 
       const standDown = (): void => {
-        engine?.standDown()
+        // Without a running engine, the one that stood down last keeps its reverts.
+        if (engine === null) return
+        engine.standDown()
+        steppedDown?.abandonReverts()
         steppedDown = engine
         engine = null
       }
