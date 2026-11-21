@@ -57,7 +57,8 @@ export class PutExecutor {
   private disposed = false
 
   private readonly minIntervalMs: number
-  private readonly timeoutMs: number
+  /** How long a PUT waits for its terminal reply; after that it counts as failed. */
+  readonly timeoutMs: number
   private readonly retryDelayMs: number
   private readonly monoMs: () => number
   private readonly log: (msg: string) => void
@@ -201,6 +202,8 @@ interface ActivePulse extends PersistedPulse {
   pulseTimer: NodeJS.Timeout | null
   revertRetryTimer: NodeJS.Timeout | null
   reverting: boolean
+  /** Its ON-PUT has not answered yet. */
+  onPending: boolean
 }
 
 export interface PulseManagerDeps {
@@ -231,6 +234,7 @@ export class PulseManager {
   private abandoned = false
   /** Reverts go out directly from now on; one still queued in the executor is left to fail. */
   private direct = false
+  private standDownMono: number | null = null
 
   constructor(private readonly deps: PulseManagerDeps) {}
 
@@ -270,7 +274,8 @@ export class PulseManager {
         ...rec,
         pulseTimer: null,
         revertRetryTimer: null,
-        reverting: true
+        reverting: true,
+        onPending: false
       }
       this.active.set(this.key(rec.ruleId, rec.target), pulse)
       this.revert(pulse, 'recovered after restart')
@@ -326,7 +331,8 @@ export class PulseManager {
       deadlineWall: this.deps.wallMs() + seconds * 1000,
       pulseTimer: null,
       revertRetryTimer: null,
-      reverting: false
+      reverting: false,
+      onPending: true
     }
     // Record on disk BEFORE energizing the output: if we die between
     // these two lines the next start reverts a switch that never went
@@ -335,6 +341,7 @@ export class PulseManager {
     this.deps.persist()
 
     this.deps.putExec.request(target, value, (ok, detail) => {
+      pulse.onPending = false
       const current = this.active.get(key)
       if (current !== pulse) return
       if (!ok) {
@@ -423,6 +430,7 @@ export class PulseManager {
    */
   revertAllUntilDone(): void {
     this.direct = true
+    this.standDownMono = this.deps.monoMs()
     for (const pulse of this.active.values()) {
       if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
       if (pulse.revertRetryTimer !== null) clearTimeout(pulse.revertRetryTimer)
@@ -455,6 +463,20 @@ export class PulseManager {
       settled = true
       clearTimeout(noReply)
       if (this.abandoned || this.active.get(key) !== pulse) return
+      if (ok && pulse.onPending && this.standDownMono !== null) {
+        // An ON-PUT in flight at the stand-down may still land after this OFF: switch off once
+        // more when it can no longer, and keep the record until then.
+        const wait =
+          this.standDownMono + this.deps.putExec.timeoutMs - this.deps.monoMs()
+        if (wait > 0) {
+          pulse.onPending = false
+          pulse.revertRetryTimer = setTimeout(() => {
+            pulse.revertRetryTimer = null
+            this.revertDirect(pulse)
+          }, wait)
+          return
+        }
+      }
       if (ok) {
         this.active.delete(key)
         this.deps.persist()

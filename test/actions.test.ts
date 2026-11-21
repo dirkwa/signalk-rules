@@ -147,15 +147,16 @@ interface PulseHarness {
 }
 
 function pulseHarness(
-  opts: { direct?: PutFn; minIntervalMs?: number } = {}
+  opts: { direct?: PutFn; minIntervalMs?: number; put?: PutFn } = {}
 ): PulseHarness {
   const putCalls: Array<{ path: string; value: unknown }> = []
   const directCalls: Array<{ path: string; value: unknown }> = []
   const events: string[] = []
   const records: Array<{ ruleId: string; rec: ActionRecord }> = []
   const failNext = { count: 0 }
-  const put: PutFn = async (path, value) => {
+  const put: PutFn = async (path, value, cb) => {
     putCalls.push({ path, value })
+    if (opts.put) return opts.put(path, value, cb)
     events.push(`put ${path}=${String(value)}`)
     if (failNext.count > 0) {
       failNext.count--
@@ -328,6 +329,21 @@ describe('PulseManager', () => {
     await flush()
     expect(h.pulses.isActive('r1', 'sw')).toBe(true)
     await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('switches off once more after a stand-down while the ON-PUT was still pending', async () => {
+    const h = pulseHarness({ put: async () => ({ state: 'PENDING' }) })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+    expect(h.directCalls).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    await advance(25_000)
     expect(h.directCalls).toHaveLength(2)
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
