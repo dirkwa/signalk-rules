@@ -231,7 +231,14 @@ export class PutExecutor {
       }
       try {
         this.put(path, value, onReply).then(onReply, (err: unknown) => {
-          settle(false, err instanceof Error ? err.message : String(err))
+          if (answered) return
+          answered = true
+          if (!settled) {
+            settle(false, err instanceof Error ? err.message : String(err))
+          } else if (late !== undefined) {
+            late(false)
+            late = undefined
+          }
         })
       } catch (err) {
         settle(false, err instanceof Error ? err.message : String(err))
