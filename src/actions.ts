@@ -171,6 +171,7 @@ export class PutExecutor {
   ): Promise<{ ok: boolean; detail?: string }> {
     return new Promise((resolve) => {
       let settled = false
+      let answered = false
       const settle = (ok: boolean, detail?: string): void => {
         if (settled) return
         settled = true
@@ -185,8 +186,10 @@ export class PutExecutor {
         const terminal = isTerminalReply(reply)
         if (terminal === null) return
         if (!settled) {
+          answered = true
           settle(terminal.ok, terminal.detail)
-        } else if (late !== undefined) {
+        } else if (!answered && late !== undefined) {
+          // Only after a timeout: a handler may send its one answer both ways.
           late(terminal.ok)
           late = undefined
         }
@@ -219,8 +222,6 @@ interface ActivePulse extends PersistedPulse {
   reverting: boolean
   /** Its ON-PUT has not answered yet. */
   onPending: boolean
-  /** A direct OFF went through while the ON was unanswered: the ON's answer decides what follows. */
-  offBeforeOn: boolean
   /** An ON-PUT still unanswered may land until then: only an OFF sent from then on is the last. */
   onDeadlineMono: number | null
 }
@@ -304,7 +305,6 @@ export class PulseManager {
         revertRetryTimer: null,
         reverting: true,
         onPending: false,
-        offBeforeOn: false,
         onDeadlineMono: rec.onPending === true ? this.onDeadline() : null
       }
       this.active.set(this.key(rec.ruleId, rec.target), pulse)
@@ -363,7 +363,6 @@ export class PulseManager {
       revertRetryTimer: null,
       reverting: false,
       onPending: true,
-      offBeforeOn: false,
       onDeadlineMono: null
     }
     // Record on disk BEFORE energizing the output: if we die between
@@ -441,23 +440,14 @@ export class PulseManager {
    * through is switched off again, also when its record is long gone.
    */
   private onAnsweredLate(pulse: ActivePulse, ok: boolean): void {
+    // A failed attempt says nothing of a retry that may still land; the record stays.
+    if (!ok) return
     pulse.onPending = false
     const key = this.key(pulse.ruleId, pulse.target)
     const recorded = this.active.get(key) === pulse
     if (this.abandoned || this.stopped) {
       // Another engine owns the records now, or none runs: switch off without touching them.
-      if (ok) {
-        this.deps
-          .putDirect(pulse.target, pulse.revertValue, () => undefined)
-          .catch(() => undefined)
-      }
-      return
-    }
-    if (!ok) {
-      if (recorded && pulse.offBeforeOn) {
-        this.active.delete(key)
-        this.deps.persist()
-      }
+      this.offUntracked(pulse)
       return
     }
     this.deps.log(
@@ -563,25 +553,56 @@ export class PulseManager {
 
   /** An ON still unanswered may land after this OFF: keep the record until it answers. */
   private waitForOn(pulse: ActivePulse): boolean {
-    if (!pulse.onPending) return false
-    pulse.offBeforeOn = true
-    return true
+    return pulse.onPending
+  }
+
+  private offUntracked(pulse: ActivePulse): void {
+    this.directOnce(pulse.target, pulse.revertValue, (ok) => {
+      if (ok) return
+      setTimeout(() => {
+        this.offUntracked(pulse)
+      }, REVERT_RETRY_MS).unref?.()
+    })
+  }
+
+  /** One direct PUT, settled once by its terminal reply, a failure, or no reply in time. */
+  private directOnce(
+    target: string,
+    value: number,
+    settle: (ok: boolean, detail?: string) => void
+  ): void {
+    let settled = false
+    const once = (ok: boolean, detail?: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(noReply)
+      settle(ok, detail)
+    }
+    // A PENDING reply ends in the update callback; one that never comes is a failure.
+    const noReply = setTimeout(() => {
+      once(false, 'no reply')
+    }, REVERT_REPLY_TIMEOUT_MS)
+    noReply.unref?.()
+    const onReply = (reply?: unknown): void => {
+      const terminal = isTerminalReply(reply)
+      if (terminal !== null) once(terminal.ok, terminal.detail)
+    }
+    try {
+      this.deps
+        .putDirect(target, value, onReply)
+        .then(onReply, (err: unknown) => {
+          once(false, err instanceof Error ? err.message : String(err))
+        })
+    } catch (err) {
+      once(false, err instanceof Error ? err.message : String(err))
+    }
   }
 
   private revertDirect(pulse: ActivePulse): void {
     pulse.reverting = true
     const key = this.key(pulse.ruleId, pulse.target)
     const sentMono = this.deps.monoMs()
-    let settled = false
-    // A PENDING reply ends in the update callback; one that never comes is a failure.
-    const noReply = setTimeout(() => {
-      settle(false, 'no reply')
-    }, REVERT_REPLY_TIMEOUT_MS)
-    noReply.unref?.()
-    const settle = (ok: boolean, detail?: string): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(noReply)
+    this.directOnce(pulse.target, pulse.revertValue, (ok, detail) => {
       if (this.abandoned || this.active.get(key) !== pulse) return
       if (ok && this.waitForOn(pulse)) return
       if (
@@ -601,20 +622,7 @@ export class PulseManager {
         pulse.revertRetryTimer = null
         this.revertDirect(pulse)
       }, REVERT_RETRY_MS)
-    }
-    const onReply = (reply?: unknown): void => {
-      const terminal = isTerminalReply(reply)
-      if (terminal !== null) settle(terminal.ok, terminal.detail)
-    }
-    try {
-      this.deps
-        .putDirect(pulse.target, pulse.revertValue, onReply)
-        .then(onReply, (err: unknown) => {
-          settle(false, err instanceof Error ? err.message : String(err))
-        })
-    } catch (err) {
-      settle(false, err instanceof Error ? err.message : String(err))
-    }
+    })
   }
 
   /**

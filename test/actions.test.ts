@@ -404,18 +404,62 @@ describe('PulseManager', () => {
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 
-  it('drops the record of a stood-down pulse once its unanswered ON fails', async () => {
+  it('keeps the record while any ON attempt may still land after a stand-down', async () => {
     const on = pendingOn()
     const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000)
+    expect(on.answers).toHaveLength(2)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+
+    on.answers[0]?.(failReply)
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    on.answers[1]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('takes a terminal answer sent both ways as one', async () => {
+    const h = pulseHarness({
+      put: async (_p, _v, cb) => {
+        cb?.(okReply)
+        return okReply
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await advance(10_000)
+    expect(h.putCalls).toEqual([{ path: 'sw', value: 1 }])
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+  })
+
+  it('retries the OFF for a late ON once its engine was replaced, until it goes through', async () => {
+    const on = pendingOn()
+    let direct = 0
+    const h = pulseHarness({
+      put: on.put,
+      direct: () =>
+        ++direct === 2
+          ? Promise.reject(new Error('bus busy'))
+          : Promise.resolve(okReply)
+    })
     h.pulses.start('r1', 'sw', 1, 0, 30)
     await flush()
     h.pulses.revertAllUntilDone()
     h.putExec.dispose()
     await flush()
-    on.answers[0]?.(failReply)
+    h.pulses.abandonReverts()
+    on.answers[0]?.(okReply)
     await flush()
-    expect(h.directCalls).toHaveLength(1)
-    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+    expect(h.directCalls).toHaveLength(2)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(3)
+    await advance(60_000)
+    expect(h.directCalls).toHaveLength(3)
   })
 
   it('switches off an ON that went through after it had timed out', async () => {
