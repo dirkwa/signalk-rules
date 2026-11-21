@@ -6,6 +6,17 @@ import { dirname, join } from 'node:path'
 import { Engine } from './engine.js'
 import { RulesStore } from './store.js'
 import { registerApiRoutes } from './api.js'
+import {
+  followMultihelm,
+  rulesDataset,
+  type Mode,
+  type MultihelmFollower,
+  type MultihelmHost
+} from './multihelm.js'
+import { EMPTY_RULES_DOC, type RulesDocT } from './shared/schemas.js'
+
+const runsRules = (mode: Mode): boolean =>
+  mode === 'standalone' || mode === 'master'
 
 const PLUGIN_ID = 'signalk-rules'
 
@@ -39,7 +50,13 @@ interface PluginConfig {
  */
 const plugin = (app: ServerAPI): Plugin => {
   let engine: Engine | null = null
+  /** The last engine to stand down, while its pulse reverts may still retry. */
+  let steppedDown: Engine | null = null
   let store: RulesStore | null = null
+  let doc: RulesDocT = EMPTY_RULES_DOC
+  let mode: Mode = 'waiting'
+  let follower: MultihelmFollower | null = null
+  let startedAt = 0
 
   return {
     id: PLUGIN_ID,
@@ -77,14 +94,23 @@ const plugin = (app: ServerAPI): Plugin => {
 
     start: (config: object) => {
       const cfg = config as PluginConfig
-      store = new RulesStore(app.getDataDirPath())
-      engine = new Engine(
-        {
-          tickSeconds: cfg.tickSeconds ?? 1,
-          defaultStaleSeconds: cfg.defaultStaleSeconds ?? 300,
-          verbose: cfg.verboseLog ?? false
-        },
-        {
+      const engineConfig = {
+        tickSeconds: cfg.tickSeconds ?? 1,
+        defaultStaleSeconds: cfg.defaultStaleSeconds ?? 300,
+        verbose: cfg.verboseLog ?? false
+      }
+      const rulesStore = new RulesStore(app.getDataDirPath())
+      store = rulesStore
+      const loaded = rulesStore.loadRules()
+      if (loaded.error !== undefined) app.setPluginError(loaded.error)
+      doc = loaded.doc
+      startedAt = Date.now()
+
+      const runEngine = (takeOver: boolean): void => {
+        // The new engine reverts any pulse still on disk itself.
+        steppedDown?.abandonReverts()
+        steppedDown = null
+        const started = new Engine(engineConfig, {
           subscribe: (path, cb) =>
             app.streambundle
               .getSelfBus(path as Path)
@@ -110,18 +136,69 @@ const plugin = (app: ServerAPI): Plugin => {
           setStatus: (msg) => app.setPluginStatus(msg),
           setError: (msg) => app.setPluginError(msg),
           debug: (msg) => app.debug(msg),
-          store
+          store: rulesStore
+        })
+        try {
+          started.start(doc, { takeOver })
+          engine = started
+        } catch (err) {
+          started.stop()
+          app.setPluginError(
+            `cannot start the rules: ${err instanceof Error ? err.message : String(err)}`
+          )
         }
+      }
+
+      const standDown = (): void => {
+        // Without a running engine, the one that stood down last keeps its reverts.
+        if (engine === null) return
+        engine.standDown()
+        steppedDown?.abandonReverts()
+        steppedDown = engine
+        engine = null
+      }
+
+      const setMode = (next: Mode): void => {
+        // A server running alone that Multihelm now makes the master
+        // takes over like any other: another may have run the rules.
+        const takesOver = mode === 'standalone' && next === 'master'
+        mode = next
+        if (!runsRules(next) || takesOver) standDown()
+        if (runsRules(next) && engine === null) runEngine(next === 'master')
+        if (next === 'member') {
+          app.setPluginStatus("Another of the boat's servers runs the rules")
+        } else if (next === 'waiting') {
+          app.setPluginStatus(
+            'Waiting for Multihelm to say which server runs the rules'
+          )
+        }
+      }
+
+      mode = 'waiting'
+      follower = followMultihelm(
+        app as MultihelmHost,
+        rulesDataset({
+          rulesFile: () => rulesStore.rulesFile(),
+          rulesReplaced: (next) => {
+            doc = next
+            engine?.reload(next)
+            app.debug('rules taken over from another server')
+          }
+        }),
+        setMode,
+        { debug: (msg) => app.debug(msg), error: (msg) => app.error(msg) }
       )
-      const { doc, error } = store.loadRules()
-      if (error !== undefined) app.setPluginError(error)
-      engine.start(doc)
     },
 
     stop: () => {
+      follower?.stop()
+      follower = null
+      steppedDown?.abandonReverts()
+      steppedDown = null
       engine?.stop()
       engine = null
       store = null
+      mode = 'waiting'
     },
 
     registerWithRouter: (router: IRouter) => {
@@ -130,6 +207,22 @@ const plugin = (app: ServerAPI): Plugin => {
         version,
         getEngine: () => engine,
         getStore: () => store,
+        getDoc: () => doc,
+        standbyState: () => ({
+          rules: [],
+          tickSeconds: 0,
+          defaultStaleSeconds: 0,
+          inputCount: 0,
+          staleInputCount: 0,
+          now: Date.now(),
+          startedAt,
+          standby: mode === 'member' ? 'member' : 'waiting'
+        }),
+        rulesSaved: (next) => {
+          doc = next
+          engine?.reload(next)
+          follower?.changed()
+        },
         onError: (msg) => app.setPluginError(msg)
       })
     }

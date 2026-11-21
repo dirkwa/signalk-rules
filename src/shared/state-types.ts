@@ -67,6 +67,10 @@ export interface EngineState {
   /** Epoch millis on the server when this snapshot was taken. */
   now: number
   startedAt: number
+  /** Set while another of the boat's servers runs the rules
+   *  (`member`), or while Multihelm has not said which one does yet
+   *  (`waiting`); this one then switches nothing. */
+  standby?: 'member' | 'waiting'
 }
 
 export interface RuleTestResult {

@@ -25,6 +25,7 @@ a sentence-style web UI. Two halves in one npm package:
 | `src/conditions.ts`               | Tri-state condition evaluation incl. hysteresis latch |
 | `src/actions.ts`                  | PutExecutor (throttle/retry/timeout) + PulseManager (crash-safe pulses) |
 | `src/engine.ts`                   | Orchestration: subscriptions, ticker, effects  |
+| `src/multihelm.ts`                | Which server runs the rules; the rules dataset |
 | `webapp/src/stores/`              | zustand stores: rulesStore (draft/save), liveStore (WS + /state poll), metaStore (displayName) |
 | `webapp/src/pages/RuleEditorPage.tsx` | The sentence editor                        |
 
@@ -54,6 +55,13 @@ a sentence-style web UI. Two halves in one npm package:
    synchronously BEFORE the ON-PUT (`PulseManager.start`), start-up
    reverts any record found on disk, `stop()` reverts before
    teardown, and the revert PUT retries forever. Do not reorder.
+   An ON-PUT's answer is followed even after it timed out or the
+   executor was disposed (`LateFn`): a pulse keeps its record until
+   no attempt of its ON may still answer (`MayLand`, from
+   `PutExecutor.request`), and an ON that went through late is
+   switched off again. A record loaded with `onPending` (its ON's
+   answer went to an earlier run) is switched off once more after
+   the PUT timeout.
 7. **All PUTs go through PutExecutor** — per-path serialization,
    ≥2 s spacing, latest-wins queueing, one retry, 25 s terminal-reply
    timeout. `putSelfPath`'s promise may resolve PENDING; the terminal
@@ -79,6 +87,15 @@ a sentence-style web UI. Two halves in one npm package:
     no edge: no PUT and no pulse, and its reassert waits for known
     input that agrees. Notifications are raised again at start
     because the server drops them on restart.
+
+12. **Only Multihelm's master switches.** `src/multihelm.ts` follows
+    the `multihelm` PropertyValue: without an enabled Multihelm the
+    engine runs alone, under it only while the role is `master`, and
+    not at all while Multihelm has not said. A server that becomes the
+    master starts with `takeOver`: no saved decisions, pulse cooldowns
+    armed. One that stops being it calls `standDown()`, whose pulse
+    reverts retry until they go through. `rules.json`
+    is the `signalk-rules/rules` dataset, put in place byte for byte.
 
 ## REST API (`src/api.ts`)
 

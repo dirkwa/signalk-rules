@@ -67,6 +67,10 @@ export class RulesStore {
     return path.join(this.dir, name)
   }
 
+  rulesFile(): string {
+    return this.file(RULES_FILE)
+  }
+
   loadRules(): { doc: RulesDocT; error?: string } {
     let raw: string
     try {

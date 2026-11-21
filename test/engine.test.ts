@@ -1077,3 +1077,106 @@ describe('Engine — switches that stay on', () => {
     ).toEqual([`leave ${HEATER} as it is`])
   })
 })
+
+describe('Engine — taking the rules over from another server', () => {
+  const SOC = 'electrical.batteries.60.capacity.stateOfCharge'
+  const STARTER = 'electrical.switches.bank.50.1.state'
+  const genRule = (): RuleT => ({
+    id: 'cccccccc-1111-2222-3333-444444444444',
+    name: 'Gen start',
+    enabled: true,
+    dryRun: false,
+    combinator: 'all',
+    conditions: [
+      { type: 'numeric', path: SOC, operator: 'lt', threshold: 0.25 }
+    ],
+    actions: [
+      { type: 'pulse', path: STARTER, seconds: 30 },
+      {
+        type: 'notification',
+        pathSuffix: 'generator.autostart',
+        state: 'alert',
+        method: ['visual'],
+        message: 'Generator autostart'
+      }
+    ],
+    options: { cooldownSeconds: 1800 }
+  })
+
+  it('waits out the cooldown before it pulses, as the old master may just have', async () => {
+    h = harness({ [STARTER]: 0, [SOC]: 0.2 })
+    h.engine.start(doc(genRule()), { takeOver: true })
+    await flush()
+    expect(h.puts).toEqual([])
+    expect(h.engine.getState().rules[0]?.cooldownRemainingMs).toBe(1800_000)
+
+    h.push(SOC, 0.4)
+    await flush()
+    h.clock.advance(1800_000)
+    h.push(SOC, 0.2)
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(h.puts[0]).toEqual({ path: STARTER, value: 1 })
+  })
+
+  it('measures against the switches, not a decision it saved long ago', async () => {
+    h = harness({ [HEATER]: 0 })
+    h.engine.start(doc(waterHeaterRule()))
+    h.push(SOLAR, 5)
+    await flush()
+    expect(h.puts).toEqual([{ path: HEATER, value: 1 }])
+
+    // Another server ran the rules for an hour; the heater is still on.
+    const first = h
+    first.engine.stop()
+    first.clock.advance(3600_000)
+    h = harness(first.model, { dir: first.dir, clock: first.clock })
+    h.engine.start(doc(waterHeaterRule()), { takeOver: true })
+    await flush()
+    expect(h.puts).toEqual([])
+    const rule = h.engine.getState().rules[0]
+    expect(rule?.decision).toBe('on')
+    expect(rule?.decisionSince).toBe(h.clock.wallMs())
+    expect(rule?.lastActions[0]?.kind).toBe('skippedAlreadySet')
+  })
+
+  it('keeps reverting a pulse after it stood down until the revert goes through', async () => {
+    let refused = 0
+    h = harness(
+      { [STARTER]: 0 },
+      {
+        reply: (p) =>
+          p === STARTER && h.model[STARTER] === 1 && refused++ === 0
+            ? Promise.reject(new Error('bus busy'))
+            : undefined
+      }
+    )
+    h.engine.start(doc(genRule()))
+    h.push(SOC, 0.2)
+    await flush()
+    expect(h.puts).toEqual([{ path: STARTER, value: 1 }])
+
+    h.engine.standDown()
+    await flush()
+    expect(h.model[STARTER]).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.model[STARTER]).toBe(0)
+    expect(new RulesStore(h.dir).loadRuntimeState().pulses).toEqual([])
+  })
+
+  it('clears what it raised when it stands down', async () => {
+    h = harness({ [STARTER]: 0 })
+    h.engine.start(doc(genRule()))
+    h.push(SOC, 0.2)
+    await flush()
+    expect(h.deltas).toHaveLength(1)
+
+    h.engine.standDown()
+    const last = h.deltas.at(-1) as {
+      updates: Array<{ values: Array<{ value: { state: string } }> }>
+    }
+    expect(last.updates[0]?.values[0]?.value.state).toBe('normal')
+    // The pulse in flight is reverted, as at every stop.
+    await flush()
+    expect(h.puts.at(-1)).toEqual({ path: STARTER, value: 0 })
+  })
+})

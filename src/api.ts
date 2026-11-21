@@ -1,6 +1,8 @@
 import type { Request, Response, IRouter } from 'express'
 import type { Engine } from './engine.js'
 import type { RulesStore } from './store.js'
+import type { RulesDocT } from './shared/schemas.js'
+import type { EngineState } from './shared/state-types.js'
 import { validateRulesDoc } from './shared/validate.js'
 
 type Handler = (req: Request, res: Response) => void
@@ -20,8 +22,13 @@ type AccessRouter = IRouter & {
 export interface ApiDeps {
   pluginId: string
   version: string
+  /** Null while another server runs the rules. */
   getEngine(): Engine | null
   getStore(): RulesStore | null
+  getDoc(): RulesDocT
+  /** What `/state` answers while this server runs no rules. */
+  standbyState(): EngineState
+  rulesSaved(doc: RulesDocT): void
   onError(msg: string): void
 }
 
@@ -36,17 +43,26 @@ export function registerApiRoutes(router: IRouter, deps: ApiDeps): void {
   const readonly: RouteRegistrar = r.access ? r.access('readonly') : r
   const readwrite: RouteRegistrar = r.access ? r.access('readwrite') : r
 
-  const withEngine = (
-    res: Response,
-    fn: (engine: Engine, store: RulesStore) => void
-  ): void => {
-    const engine = deps.getEngine()
+  const withStore = (res: Response, fn: (store: RulesStore) => void): void => {
     const store = deps.getStore()
-    if (engine === null || store === null) {
+    if (store === null) {
       res.status(503).json({ error: 'plugin not started' })
       return
     }
-    fn(engine, store)
+    fn(store)
+  }
+
+  const withEngine = (res: Response, fn: (engine: Engine) => void): void => {
+    withStore(res, () => {
+      const engine = deps.getEngine()
+      if (engine === null) {
+        res
+          .status(503)
+          .json({ error: "another of the boat's servers runs the rules" })
+        return
+      }
+      fn(engine)
+    })
   }
 
   readonly.get('/status', (_req, res) => {
@@ -58,13 +74,13 @@ export function registerApiRoutes(router: IRouter, deps: ApiDeps): void {
   })
 
   readonly.get('/rules', (_req, res) => {
-    withEngine(res, (engine) => {
-      res.json(engine.getDoc())
+    withStore(res, () => {
+      res.json(deps.getDoc())
     })
   })
 
   readwrite.put('/rules', (req, res) => {
-    withEngine(res, (engine, store) => {
+    withStore(res, (store) => {
       const result = validateRulesDoc(req.body)
       if (!result.ok) {
         res.status(400).json({
@@ -77,7 +93,7 @@ export function registerApiRoutes(router: IRouter, deps: ApiDeps): void {
       store
         .saveRules(result.doc)
         .then(() => {
-          engine.reload(result.doc)
+          deps.rulesSaved(result.doc)
           res.json({ ok: true, warnings: result.warnings })
         })
         .catch((err: unknown) => {
@@ -89,8 +105,8 @@ export function registerApiRoutes(router: IRouter, deps: ApiDeps): void {
   })
 
   readonly.get('/state', (_req, res) => {
-    withEngine(res, (engine) => {
-      res.json(engine.getState())
+    withStore(res, () => {
+      res.json(deps.getEngine()?.getState() ?? deps.standbyState())
     })
   })
 

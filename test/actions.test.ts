@@ -67,6 +67,28 @@ describe('PutExecutor', () => {
     exec.dispose()
   })
 
+  it("takes a rejection after the timeout as the attempt's one late answer", async () => {
+    let reject: ((err: Error) => void) | undefined
+    const put: PutFn = () =>
+      new Promise((_resolve, rej) => {
+        reject = rej
+      })
+    const exec = new PutExecutor(put, {
+      monoMs: () => mono,
+      timeoutMs: 1000,
+      retryDelayMs: 100_000
+    })
+    const late = vi.fn()
+    const mayLand = exec.request('a.b', 1, () => undefined, late)
+    await advance(1000)
+    expect(mayLand()).toBe(true)
+    reject?.(new Error('handler gone'))
+    await flush()
+    expect(late).toHaveBeenCalledWith(false)
+    exec.dispose()
+    expect(mayLand()).toBe(false)
+  })
+
   it('retries once on failure, then reports failure', async () => {
     let attempts = 0
     const put: PutFn = async () => {
@@ -143,16 +165,20 @@ interface PulseHarness {
   events: string[]
   records: Array<{ ruleId: string; rec: ActionRecord }>
   failNext: { count: number }
+  putExec: PutExecutor
 }
 
-function pulseHarness(): PulseHarness {
+function pulseHarness(
+  opts: { direct?: PutFn; minIntervalMs?: number; put?: PutFn } = {}
+): PulseHarness {
   const putCalls: Array<{ path: string; value: unknown }> = []
   const directCalls: Array<{ path: string; value: unknown }> = []
   const events: string[] = []
   const records: Array<{ ruleId: string; rec: ActionRecord }> = []
   const failNext = { count: 0 }
-  const put: PutFn = async (path, value) => {
+  const put: PutFn = async (path, value, cb) => {
     putCalls.push({ path, value })
+    if (opts.put) return opts.put(path, value, cb)
     events.push(`put ${path}=${String(value)}`)
     if (failNext.count > 0) {
       failNext.count--
@@ -160,11 +186,14 @@ function pulseHarness(): PulseHarness {
     }
     return okReply
   }
-  const putDirect: PutFn = async (path, value) => {
+  const putDirect: PutFn = async (path, value, cb) => {
     directCalls.push({ path, value })
-    return okReply
+    return opts.direct ? opts.direct(path, value, cb) : okReply
   }
-  const putExec = new PutExecutor(put, { monoMs: () => mono, minIntervalMs: 0 })
+  const putExec = new PutExecutor(put, {
+    monoMs: () => mono,
+    minIntervalMs: opts.minIntervalMs ?? 0
+  })
   const pulses = new PulseManager({
     putExec,
     putDirect,
@@ -174,7 +203,7 @@ function pulseHarness(): PulseHarness {
     log: () => undefined,
     onRecord: (ruleId, rec) => records.push({ ruleId, rec })
   })
-  return { pulses, putCalls, directCalls, events, records, failNext }
+  return { pulses, putCalls, directCalls, events, records, failNext, putExec }
 }
 
 describe('PulseManager', () => {
@@ -263,6 +292,324 @@ describe('PulseManager', () => {
     await flush()
     expect(h.putCalls).toEqual([{ path: 'sw', value: 0 }])
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('keeps a record saved with its ON-PUT unanswered until it switched off once more', async () => {
+    const h = pulseHarness()
+    h.pulses.restoreAndRevert([
+      {
+        ruleId: 'r1',
+        target: 'sw',
+        revertValue: 0,
+        deadlineWall: wall,
+        onPending: true
+      }
+    ])
+    await flush()
+    expect(h.putCalls).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    await advance(25_000)
+    expect(h.putCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('saves that a pulse has its ON-PUT unanswered until the answer comes', async () => {
+    let answer: ((reply: unknown) => void) | undefined
+    const h = pulseHarness({
+      put: async (_p, _v, cb) => {
+        answer = cb
+        return { state: 'PENDING' }
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+    const saved = h.events.filter((e) => e === 'persist').length
+    answer?.(okReply)
+    await flush()
+    expect(h.pulses.snapshot()[0]?.onPending).toBeUndefined()
+    expect(h.events.filter((e) => e === 'persist').length).toBe(saved + 1)
+  })
+
+  it('after a stand-down, waits for the final reply of a pending revert and retries a failed one', async () => {
+    let attempt = 0
+    const h = pulseHarness({
+      direct: (_path, _value, cb) => {
+        attempt++
+        if (attempt === 1) setTimeout(() => cb(failReply), 1000)
+        return Promise.resolve(
+          attempt === 1 ? { state: 'PENDING', statusCode: 202 } : okReply
+        )
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    await advance(1000)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('after a stand-down, tries again when a pending revert never gets its final reply', async () => {
+    let attempt = 0
+    const h = pulseHarness({
+      direct: () =>
+        Promise.resolve(
+          ++attempt === 1 ? { state: 'PENDING', statusCode: 202 } : okReply
+        )
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    await advance(25_000)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('keeps the record of a stood-down pulse whose ON-PUT was still queued', async () => {
+    let attempt = 0
+    const h = pulseHarness({
+      minIntervalMs: 2000,
+      direct: () =>
+        ++attempt === 1
+          ? Promise.reject(new Error('bus busy'))
+          : Promise.resolve(okReply)
+    })
+    h.putExec.request('sw', 0, () => undefined)
+    await flush()
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  const pendingOn = (): {
+    answers: Array<(reply: unknown) => void>
+    put: PutFn
+  } => {
+    const answers: Array<(reply: unknown) => void> = []
+    return {
+      answers,
+      put: async (_p, value, cb) => {
+        if (value === 0) return okReply
+        if (cb) answers.push(cb)
+        return { state: 'PENDING' }
+      }
+    }
+  }
+
+  it('keeps the record of a pulse stood down with its ON unanswered until the ON goes through, then switches off again', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await advance(60_000)
+    expect(h.directCalls).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('keeps the record while any ON attempt may still land after a stand-down', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000)
+    expect(on.answers).toHaveLength(2)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+
+    on.answers[0]?.(failReply)
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    on.answers[1]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('keeps the record after a stand-down while the retry may land, though the first ON went through late', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000)
+    expect(on.answers).toHaveLength(2)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    on.answers[1]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(3)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('lets only the latest OFF release the record, so a stale OFF cannot hide a failed corrective one', async () => {
+    const on = pendingOn()
+    let firstOff: ((reply: unknown) => void) | undefined
+    let direct = 0
+    const h = pulseHarness({
+      put: on.put,
+      direct: async (_p, _v, cb) => {
+        direct++
+        if (direct === 1) {
+          firstOff = cb
+          return { state: 'PENDING' }
+        }
+        if (direct === 2) throw new Error('bus busy')
+        return okReply
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    firstOff?.(okReply)
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(3)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('takes a terminal answer sent both ways as one', async () => {
+    const h = pulseHarness({
+      put: async (_p, _v, cb) => {
+        cb?.(okReply)
+        return okReply
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await advance(10_000)
+    expect(h.putCalls).toEqual([{ path: 'sw', value: 1 }])
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+  })
+
+  it('retries the OFF for a late ON once its engine was replaced, until it goes through', async () => {
+    const on = pendingOn()
+    let direct = 0
+    const h = pulseHarness({
+      put: on.put,
+      direct: () =>
+        ++direct === 2
+          ? Promise.reject(new Error('bus busy'))
+          : Promise.resolve(okReply)
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+    h.pulses.abandonReverts()
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(3)
+    await advance(60_000)
+    expect(h.directCalls).toHaveLength(3)
+  })
+
+  it('switches off an ON that went through after it had timed out, and keeps the record until no attempt may land', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000 + 25_000)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    on.answers[0]?.(okReply)
+    await advance(2000)
+    expect(h.putCalls.at(-1)).toEqual({ path: 'sw', value: 0 })
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    on.answers[1]?.(failReply)
+    await advance(2000)
+    expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+    expect(h.records.at(-1)?.rec.kind).toBe('pulseEnd')
+  })
+
+  it('keeps the record of an earlier ON that went through late until the retry still pending answers', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000)
+    expect(on.answers).toHaveLength(2)
+
+    on.answers[0]?.(okReply)
+    await advance(120_000)
+    expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    on.answers[1]?.(okReply)
+    await advance(2000)
+    expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('still switches off an ON that goes through once its engine was replaced', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+    h.pulses.abandonReverts()
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+  })
+
+  it('leaves no retry running once a stood-down revert is abandoned', async () => {
+    const h = pulseHarness({
+      minIntervalMs: 60_000,
+      direct: () => Promise.reject(new Error('bus busy'))
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 1)
+    await advance(1000)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    h.pulses.abandonReverts()
+    await advance(60_000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('stopAll cancels timers and fires direct fail-safe reverts', async () => {
