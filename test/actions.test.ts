@@ -272,6 +272,73 @@ describe('PulseManager', () => {
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 
+  it('keeps a record saved with its ON-PUT unanswered until it switched off once more', async () => {
+    const h = pulseHarness()
+    h.pulses.restoreAndRevert([
+      {
+        ruleId: 'r1',
+        target: 'sw',
+        revertValue: 0,
+        deadlineWall: wall,
+        onPending: true
+      }
+    ])
+    await flush()
+    expect(h.putCalls).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    await advance(25_000)
+    expect(h.putCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('saves that a pulse has its ON-PUT unanswered until the answer comes', async () => {
+    let answer: ((reply: unknown) => void) | undefined
+    const h = pulseHarness({
+      put: async (_p, _v, cb) => {
+        answer = cb
+        return { state: 'PENDING' }
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+    const saved = h.events.filter((e) => e === 'persist').length
+    answer?.(okReply)
+    await flush()
+    expect(h.pulses.snapshot()[0]?.onPending).toBeUndefined()
+    expect(h.events.filter((e) => e === 'persist').length).toBe(saved + 1)
+  })
+
+  it('switches off once more when a stood-down OFF sent before the ON deadline answers after it', async () => {
+    let attempt = 0
+    let answer: ((reply: unknown) => void) | undefined
+    const h = pulseHarness({
+      put: async () => ({ state: 'PENDING' }),
+      direct: async (_p, _v, cb) => {
+        attempt++
+        if (attempt === 1) throw new Error('bus busy')
+        if (attempt === 2) {
+          answer = cb
+          return { state: 'PENDING' }
+        }
+        return okReply
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    await advance(23_000)
+    answer?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(3)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
   it('after a stand-down, waits for the final reply of a pending revert and retries a failed one', async () => {
     let attempt = 0
     const h = pulseHarness({

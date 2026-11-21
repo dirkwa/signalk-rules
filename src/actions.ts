@@ -196,6 +196,8 @@ export interface PersistedPulse {
   target: string
   revertValue: number
   deadlineWall: number
+  /** Its ON-PUT had not answered when the record was saved. */
+  onPending?: boolean
 }
 
 interface ActivePulse extends PersistedPulse {
@@ -204,6 +206,8 @@ interface ActivePulse extends PersistedPulse {
   reverting: boolean
   /** Its ON-PUT has not answered yet. */
   onPending: boolean
+  /** An ON-PUT still unanswered may land until then: only an OFF sent from then on is the last. */
+  onDeadlineMono: number | null
 }
 
 export interface PulseManagerDeps {
@@ -234,7 +238,6 @@ export class PulseManager {
   private abandoned = false
   /** Reverts go out directly from now on; one still queued in the executor is left to fail. */
   private direct = false
-  private standDownMono: number | null = null
 
   constructor(private readonly deps: PulseManagerDeps) {}
 
@@ -244,11 +247,12 @@ export class PulseManager {
 
   snapshot(): PersistedPulse[] {
     return [...this.active.values()].map(
-      ({ ruleId, target, revertValue, deadlineWall }) => ({
+      ({ ruleId, target, revertValue, deadlineWall, onPending }) => ({
         ruleId,
         target,
         revertValue,
-        deadlineWall
+        deadlineWall,
+        ...(onPending ? { onPending } : {})
       })
     )
   }
@@ -270,12 +274,14 @@ export class PulseManager {
       this.deps.log(
         `reverting pulse left over from previous run: ${rec.target} -> ${rec.revertValue}`
       )
+      const onPending = rec.onPending === true
       const pulse: ActivePulse = {
         ...rec,
         pulseTimer: null,
         revertRetryTimer: null,
         reverting: true,
-        onPending: false
+        onPending,
+        onDeadlineMono: onPending ? this.onDeadline() : null
       }
       this.active.set(this.key(rec.ruleId, rec.target), pulse)
       this.revert(pulse, 'recovered after restart')
@@ -332,7 +338,8 @@ export class PulseManager {
       pulseTimer: null,
       revertRetryTimer: null,
       reverting: false,
-      onPending: true
+      onPending: true,
+      onDeadlineMono: null
     }
     // Record on disk BEFORE energizing the output: if we die between
     // these two lines the next start reverts a switch that never went
@@ -341,7 +348,9 @@ export class PulseManager {
     this.deps.persist()
 
     this.deps.putExec.request(target, value, (ok, detail) => {
+      // Answered, or never sent when the executor was disposed with it still queued.
       pulse.onPending = false
+      pulse.onDeadlineMono = null
       const current = this.active.get(key)
       if (current !== pulse) return
       if (!ok) {
@@ -362,6 +371,7 @@ export class PulseManager {
         })
         return
       }
+      this.deps.persist()
       this.deps.onRecord(ruleId, {
         ts: this.deps.wallMs(),
         kind: 'pulseStart',
@@ -394,11 +404,43 @@ export class PulseManager {
     return new Set([...this.active.values()].map((p) => p.ruleId))
   }
 
+  /** When an ON-PUT sent by now can no longer land: its terminal reply would have timed out. */
+  private onDeadline(): number {
+    return this.deps.monoMs() + this.deps.putExec.timeoutMs
+  }
+
+  /**
+   * An OFF sent before an unanswered ON may land is not the last: switch off
+   * again once it can no longer, and keep the record until then.
+   */
+  private offAgainLater(
+    pulse: ActivePulse,
+    sentMono: number,
+    again: () => void
+  ): boolean {
+    const deadline = pulse.onDeadlineMono
+    if (deadline === null || sentMono >= deadline) return false
+    pulse.revertRetryTimer = setTimeout(
+      () => {
+        pulse.revertRetryTimer = null
+        again()
+      },
+      Math.max(0, deadline - this.deps.monoMs())
+    )
+    return true
+  }
+
   private revert(pulse: ActivePulse, reason: string): void {
     pulse.reverting = true
+    const sentMono = this.deps.monoMs()
     this.deps.putExec.request(pulse.target, pulse.revertValue, (ok, detail) => {
       const key = this.key(pulse.ruleId, pulse.target)
       if (this.direct || this.active.get(key) !== pulse) return
+      if (
+        ok &&
+        this.offAgainLater(pulse, sentMono, () => this.revert(pulse, reason))
+      )
+        return
       if (ok) {
         this.active.delete(key)
         this.deps.persist()
@@ -430,8 +472,8 @@ export class PulseManager {
    */
   revertAllUntilDone(): void {
     this.direct = true
-    this.standDownMono = this.deps.monoMs()
     for (const pulse of this.active.values()) {
+      if (pulse.onPending) pulse.onDeadlineMono = this.onDeadline()
       if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
       if (pulse.revertRetryTimer !== null) clearTimeout(pulse.revertRetryTimer)
       pulse.pulseTimer = null
@@ -452,6 +494,7 @@ export class PulseManager {
   private revertDirect(pulse: ActivePulse): void {
     pulse.reverting = true
     const key = this.key(pulse.ruleId, pulse.target)
+    const sentMono = this.deps.monoMs()
     let settled = false
     // A PENDING reply ends in the update callback; one that never comes is a failure.
     const noReply = setTimeout(() => {
@@ -463,20 +506,11 @@ export class PulseManager {
       settled = true
       clearTimeout(noReply)
       if (this.abandoned || this.active.get(key) !== pulse) return
-      if (ok && pulse.onPending && this.standDownMono !== null) {
-        // An ON-PUT in flight at the stand-down may still land after this OFF: switch off once
-        // more when it can no longer, and keep the record until then.
-        const wait =
-          this.standDownMono + this.deps.putExec.timeoutMs - this.deps.monoMs()
-        if (wait > 0) {
-          pulse.onPending = false
-          pulse.revertRetryTimer = setTimeout(() => {
-            pulse.revertRetryTimer = null
-            this.revertDirect(pulse)
-          }, wait)
-          return
-        }
-      }
+      if (
+        ok &&
+        this.offAgainLater(pulse, sentMono, () => this.revertDirect(pulse))
+      )
+        return
       if (ok) {
         this.active.delete(key)
         this.deps.persist()
