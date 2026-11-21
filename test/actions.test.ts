@@ -477,6 +477,20 @@ describe('PulseManager', () => {
     expect(h.records.at(-1)?.rec.kind).toBe('pulseEnd')
   })
 
+  it('switches off once when an earlier ON attempt goes through late while the pulse still runs', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000)
+    expect(on.answers).toHaveLength(2)
+
+    on.answers[0]?.(okReply)
+    await advance(120_000)
+    expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
   it('still switches off an ON that goes through once its engine was replaced', async () => {
     const on = pendingOn()
     const h = pulseHarness({ put: on.put })

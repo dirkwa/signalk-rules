@@ -443,6 +443,8 @@ export class PulseManager {
     // A failed attempt says nothing of a retry that may still land; the record stays.
     if (!ok) return
     pulse.onPending = false
+    if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
+    pulse.pulseTimer = null
     const key = this.key(pulse.ruleId, pulse.target)
     const recorded = this.active.get(key) === pulse
     if (this.abandoned || this.stopped) {
