@@ -311,34 +311,6 @@ describe('PulseManager', () => {
     expect(h.events.filter((e) => e === 'persist').length).toBe(saved + 1)
   })
 
-  it('switches off once more when a stood-down OFF sent before the ON deadline answers after it', async () => {
-    let attempt = 0
-    let answer: ((reply: unknown) => void) | undefined
-    const h = pulseHarness({
-      put: async () => ({ state: 'PENDING' }),
-      direct: async (_p, _v, cb) => {
-        attempt++
-        if (attempt === 1) throw new Error('bus busy')
-        if (attempt === 2) {
-          answer = cb
-          return { state: 'PENDING' }
-        }
-        return okReply
-      }
-    })
-    h.pulses.start('r1', 'sw', 1, 0, 30)
-    await flush()
-    h.pulses.revertAllUntilDone()
-    h.putExec.dispose()
-    await advance(5000)
-    expect(h.directCalls).toHaveLength(2)
-    await advance(23_000)
-    answer?.(okReply)
-    await flush()
-    expect(h.directCalls).toHaveLength(3)
-    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
-  })
-
   it('after a stand-down, waits for the final reply of a pending revert and retries a failed one', async () => {
     let attempt = 0
     const h = pulseHarness({
@@ -400,19 +372,79 @@ describe('PulseManager', () => {
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 
-  it('switches off once more after a stand-down while the ON-PUT was still pending', async () => {
-    const h = pulseHarness({ put: async () => ({ state: 'PENDING' }) })
+  const pendingOn = (): {
+    answers: Array<(reply: unknown) => void>
+    put: PutFn
+  } => {
+    const answers: Array<(reply: unknown) => void> = []
+    return {
+      answers,
+      put: async (_p, value, cb) => {
+        if (value === 0) return okReply
+        if (cb) answers.push(cb)
+        return { state: 'PENDING' }
+      }
+    }
+  }
+
+  it('keeps the record of a pulse stood down with its ON unanswered until the ON goes through, then switches off again', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await advance(60_000)
+    expect(h.directCalls).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('drops the record of a stood-down pulse once its unanswered ON fails', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
     h.pulses.start('r1', 'sw', 1, 0, 30)
     await flush()
     h.pulses.revertAllUntilDone()
     h.putExec.dispose()
     await flush()
+    on.answers[0]?.(failReply)
+    await flush()
     expect(h.directCalls).toHaveLength(1)
-    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
-
-    await advance(25_000)
-    expect(h.directCalls).toHaveLength(2)
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('switches off an ON that went through after it had timed out', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000 + 25_000)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+
+    on.answers[0]?.(okReply)
+    await advance(2000)
+    expect(h.putCalls.at(-1)).toEqual({ path: 'sw', value: 0 })
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+    expect(h.records.at(-1)?.rec.kind).toBe('pulseEnd')
+  })
+
+  it('still switches off an ON that goes through once its engine was replaced', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+    h.pulses.abandonReverts()
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
   })
 
   it('leaves no retry running once a stood-down revert is abandoned', async () => {

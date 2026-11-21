@@ -55,9 +55,12 @@ a sentence-style web UI. Two halves in one npm package:
    synchronously BEFORE the ON-PUT (`PulseManager.start`), start-up
    reverts any record found on disk, `stop()` reverts before
    teardown, and the revert PUT retries forever. Do not reorder.
-   A record whose ON-PUT had not answered (`onPending`, saved with
-   it) is switched off once more after the PUT timeout, since that
-   ON may still land after the first OFF.
+   An ON-PUT's answer is followed even after it timed out or the
+   executor was disposed (`LateFn`): a stood-down pulse keeps its
+   record until its ON answers, and an ON that went through late is
+   switched off again. A record loaded with `onPending` (its ON's
+   answer went to an earlier run) is switched off once more after
+   the PUT timeout.
 7. **All PUTs go through PutExecutor** — per-path serialization,
    ≥2 s spacing, latest-wins queueing, one retry, 25 s terminal-reply
    timeout. `putSelfPath`'s promise may resolve PENDING; the terminal
