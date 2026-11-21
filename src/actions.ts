@@ -229,6 +229,8 @@ export class PulseManager {
   private readonly active = new Map<string, ActivePulse>()
   private readonly lastPulseAtWall = new Map<string, number>()
   private abandoned = false
+  /** Reverts go out directly from now on; one still queued in the executor is left to fail. */
+  private direct = false
 
   constructor(private readonly deps: PulseManagerDeps) {}
 
@@ -389,7 +391,7 @@ export class PulseManager {
     pulse.reverting = true
     this.deps.putExec.request(pulse.target, pulse.revertValue, (ok, detail) => {
       const key = this.key(pulse.ruleId, pulse.target)
-      if (this.active.get(key) !== pulse) return
+      if (this.direct || this.active.get(key) !== pulse) return
       if (ok) {
         this.active.delete(key)
         this.deps.persist()
@@ -420,6 +422,7 @@ export class PulseManager {
    * keep trying until each went through, or `abandonReverts()`.
    */
   revertAllUntilDone(): void {
+    this.direct = true
     for (const pulse of this.active.values()) {
       if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
       if (pulse.revertRetryTimer !== null) clearTimeout(pulse.revertRetryTimer)
@@ -486,6 +489,7 @@ export class PulseManager {
    * retried by the next start's restoreAndRevert.
    */
   stopAll(): void {
+    this.direct = true
     for (const pulse of this.active.values()) {
       if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
       if (pulse.revertRetryTimer !== null) clearTimeout(pulse.revertRetryTimer)

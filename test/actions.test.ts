@@ -332,6 +332,23 @@ describe('PulseManager', () => {
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 
+  it('leaves no retry running once a stood-down revert is abandoned', async () => {
+    const h = pulseHarness({
+      minIntervalMs: 60_000,
+      direct: () => Promise.reject(new Error('bus busy'))
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 1)
+    await advance(1000)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await advance(5000)
+    expect(h.directCalls).toHaveLength(2)
+    h.pulses.abandonReverts()
+    await advance(60_000)
+    expect(h.directCalls).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('stopAll cancels timers and fires direct fail-safe reverts', async () => {
     const h = pulseHarness()
     h.pulses.start('r1', 'sw', 1, 0, 30)
