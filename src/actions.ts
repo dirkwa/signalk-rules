@@ -12,11 +12,25 @@ export type DoneFn = (ok: boolean, detail?: string) => void
 /** A terminal reply that came after the PUT was given up on: timed out, or the executor disposed. */
 export type LateFn = (ok: boolean) => void
 
+interface Job {
+  value: unknown
+  done: DoneFn
+  late?: LateFn
+  /** Attempts sent that may still answer, a timed-out one included. */
+  open: number
+  finished: boolean
+}
+
+/** Whether an attempt of a request may still answer: queued, in flight, or timed out unanswered. */
+export type MayLand = () => boolean
+
 interface PathState {
   lastSentMono: number
   sending: boolean
   /** The latest desired value not yet transmitted — always replaceable. */
-  next: { value: unknown; done: DoneFn; late?: LateFn } | null
+  next: Job | null
+  /** No further attempt of it is sent once the executor is disposed. */
+  inFlight: Job | null
   flushScheduled: boolean
 }
 
@@ -48,6 +62,11 @@ function isTerminalReply(
   return { ok, detail: ok ? undefined : (message ?? `status ${code}`) }
 }
 
+function finish(job: Job, ok: boolean, detail?: string): void {
+  job.finished = true
+  job.done(ok, detail)
+}
+
 /**
  * Serializes and throttles PUTs per path: at most one in flight, at
  * least `minIntervalMs` apart, latest-wins queueing, one retry.
@@ -76,10 +95,10 @@ export class PutExecutor {
     this.log = opts.log ?? (() => undefined)
   }
 
-  request(path: string, value: unknown, done: DoneFn, late?: LateFn): void {
+  request(path: string, value: unknown, done: DoneFn, late?: LateFn): MayLand {
     if (this.disposed) {
       done(false, 'stopped')
-      return
+      return () => false
     }
     let st = this.states.get(path)
     if (st === undefined) {
@@ -87,14 +106,18 @@ export class PutExecutor {
         lastSentMono: Number.NEGATIVE_INFINITY,
         sending: false,
         next: null,
+        inFlight: null,
         flushScheduled: false
       }
       this.states.set(path, st)
     }
     // Latest wins — an older untransmitted value is obsolete by definition.
-    st.next?.done(false, 'superseded')
-    st.next = { value, done, ...(late ? { late } : {}) }
+    if (st.next) finish(st.next, false, 'superseded')
+    const job: Job = { value, done, open: 0, finished: false }
+    if (late) job.late = late
+    st.next = job
     this.pump(path, st)
+    return () => !job.finished || job.open > 0
   }
 
   /** Whether a PUT to `path` is in flight or queued: until it lands,
@@ -109,8 +132,9 @@ export class PutExecutor {
     for (const t of this.timers) clearTimeout(t)
     this.timers.clear()
     for (const st of this.states.values()) {
-      st.next?.done(false, 'stopped')
+      if (st.next) finish(st.next, false, 'stopped')
       st.next = null
+      if (st.inFlight) st.inFlight.finished = true
     }
   }
 
@@ -140,14 +164,21 @@ export class PutExecutor {
     const job = st.next
     st.next = null
     st.sending = true
+    st.inFlight = job
     const send = (attempt: number): void => {
       st.lastSentMono = this.monoMs()
-      void this.doPut(path, job.value, job.late).then((result) => {
+      job.open++
+      const late = (ok: boolean): void => {
+        job.open--
+        job.late?.(ok)
+      }
+      void this.doPut(path, job.value, late).then((result) => {
         // Disposing cleared the timeout, so this is the handler's own answer.
         if (this.disposed) {
-          job.late?.(result.ok)
+          late(result.ok)
           return
         }
+        if (!result.timedOut) job.open--
         if (!result.ok && attempt === 0) {
           this.log(
             `PUT ${path}=${String(job.value)} failed (${result.detail ?? ''}), retrying`
@@ -156,7 +187,8 @@ export class PutExecutor {
           return
         }
         st.sending = false
-        job.done(result.ok, result.detail)
+        st.inFlight = null
+        finish(job, result.ok, result.detail)
         this.pump(path, st)
       })
     }
@@ -168,18 +200,21 @@ export class PutExecutor {
     path: string,
     value: unknown,
     late?: LateFn
-  ): Promise<{ ok: boolean; detail?: string }> {
+  ): Promise<{ ok: boolean; detail?: string; timedOut: boolean }> {
     return new Promise((resolve) => {
       let settled = false
       let answered = false
-      const settle = (ok: boolean, detail?: string): void => {
+      const settle = (ok: boolean, detail?: string, timedOut = false): void => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         this.timers.delete(timer)
-        resolve({ ok, detail })
+        resolve({ ok, detail, timedOut })
       }
-      const timer = setTimeout(() => settle(false, 'timeout'), this.timeoutMs)
+      const timer = setTimeout(
+        () => settle(false, 'timeout', true),
+        this.timeoutMs
+      )
       this.timers.add(timer)
 
       const onReply = (reply?: unknown): void => {
@@ -220,8 +255,8 @@ interface ActivePulse extends PersistedPulse {
   pulseTimer: NodeJS.Timeout | null
   revertRetryTimer: NodeJS.Timeout | null
   reverting: boolean
-  /** Its ON-PUT has not answered yet. */
-  onPending: boolean
+  /** An attempt of its ON-PUT may still answer. */
+  onMayLand: MayLand
   /** An ON-PUT still unanswered may land until then: only an OFF sent from then on is the last. */
   onDeadlineMono: number | null
 }
@@ -269,14 +304,14 @@ export class PulseManager {
         target,
         revertValue,
         deadlineWall,
-        onPending,
+        onMayLand,
         onDeadlineMono
       }) => ({
         ruleId,
         target,
         revertValue,
         deadlineWall,
-        ...(onPending || onDeadlineMono !== null ? { onPending: true } : {})
+        ...(onMayLand() || onDeadlineMono !== null ? { onPending: true } : {})
       })
     )
   }
@@ -304,7 +339,7 @@ export class PulseManager {
         pulseTimer: null,
         revertRetryTimer: null,
         reverting: true,
-        onPending: false,
+        onMayLand: () => false,
         onDeadlineMono: rec.onPending === true ? this.onDeadline() : null
       }
       this.active.set(this.key(rec.ruleId, rec.target), pulse)
@@ -362,7 +397,7 @@ export class PulseManager {
       pulseTimer: null,
       revertRetryTimer: null,
       reverting: false,
-      onPending: true,
+      onMayLand: () => true,
       onDeadlineMono: null
     }
     // Record on disk BEFORE energizing the output: if we die between
@@ -371,18 +406,18 @@ export class PulseManager {
     this.active.set(key, pulse)
     this.deps.persist()
 
-    this.deps.putExec.request(
+    pulse.onMayLand = this.deps.putExec.request(
       target,
       value,
       (ok, detail) => {
         // Answered, or never sent when the executor was disposed with it still queued.
-        pulse.onPending = false
         pulse.onDeadlineMono = null
         const current = this.active.get(key)
         if (current !== pulse) return
         if (!ok) {
-          // A revert under way, started by a stand-down, owns the record and deletes it on success.
-          if (pulse.reverting) return
+          // A revert under way, started by a stand-down, owns the record and deletes it on success;
+          // an earlier attempt that may still land leaves the pulse to end as timed.
+          if (pulse.reverting || pulse.onMayLand()) return
           // Never energized: no revert needed. Cooldown stays consumed —
           // under-firing a starter is safer than double-firing it.
           if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
@@ -440,20 +475,22 @@ export class PulseManager {
    * through is switched off again, also when its record is long gone.
    */
   private onAnsweredLate(pulse: ActivePulse, ok: boolean): void {
-    // A failed attempt says nothing of a retry that may still land; the record stays.
-    if (!ok) return
-    pulse.onPending = false
-    if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
-    pulse.pulseTimer = null
     const key = this.key(pulse.ruleId, pulse.target)
     const recorded = this.active.get(key) === pulse
+    // A failed attempt says nothing of another that may still land. Once none may,
+    // a record kept for them after its OFF is switched off a last time and released.
+    if (!ok && (pulse.onMayLand() || !recorded || !pulse.reverting)) return
+    if (pulse.pulseTimer !== null) clearTimeout(pulse.pulseTimer)
+    pulse.pulseTimer = null
     if (this.abandoned || this.stopped) {
       // Another engine owns the records now, or none runs: switch off without touching them.
-      this.offUntracked(pulse)
+      if (ok) this.offUntracked(pulse)
       return
     }
     this.deps.log(
-      `pulse ON ${pulse.target} went through late, switching off again`
+      ok
+        ? `pulse ON ${pulse.target} went through late, switching off again`
+        : `pulse ON ${pulse.target} cannot land any more, switching off a last time`
     )
     if (!recorded) {
       if (this.active.has(key)) return
@@ -555,7 +592,7 @@ export class PulseManager {
 
   /** An ON still unanswered may land after this OFF: keep the record until it answers. */
   private waitForOn(pulse: ActivePulse): boolean {
-    return pulse.onPending
+    return pulse.onMayLand()
   }
 
   private offUntracked(pulse: ActivePulse): void {

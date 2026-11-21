@@ -424,6 +424,29 @@ describe('PulseManager', () => {
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 
+  it('keeps the record after a stand-down while the retry may land, though the first ON went through late', async () => {
+    const on = pendingOn()
+    const h = pulseHarness({ put: on.put })
+    h.pulses.start('r1', 'sw', 1, 0, 120)
+    await flush()
+    await advance(25_000 + 5000)
+    expect(on.answers).toHaveLength(2)
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    on.answers[1]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(3)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
   it('takes a terminal answer sent both ways as one', async () => {
     const h = pulseHarness({
       put: async (_p, _v, cb) => {
@@ -462,22 +485,27 @@ describe('PulseManager', () => {
     expect(h.directCalls).toHaveLength(3)
   })
 
-  it('switches off an ON that went through after it had timed out', async () => {
+  it('switches off an ON that went through after it had timed out, and keeps the record until no attempt may land', async () => {
     const on = pendingOn()
     const h = pulseHarness({ put: on.put })
     h.pulses.start('r1', 'sw', 1, 0, 120)
     await flush()
     await advance(25_000 + 5000 + 25_000)
-    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
 
     on.answers[0]?.(okReply)
     await advance(2000)
     expect(h.putCalls.at(-1)).toEqual({ path: 'sw', value: 0 })
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    on.answers[1]?.(failReply)
+    await advance(2000)
+    expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(2)
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
     expect(h.records.at(-1)?.rec.kind).toBe('pulseEnd')
   })
 
-  it('switches off once when an earlier ON attempt goes through late while the pulse still runs', async () => {
+  it('keeps the record of an earlier ON that went through late until the retry still pending answers', async () => {
     const on = pendingOn()
     const h = pulseHarness({ put: on.put })
     h.pulses.start('r1', 'sw', 1, 0, 120)
@@ -488,6 +516,12 @@ describe('PulseManager', () => {
     on.answers[0]?.(okReply)
     await advance(120_000)
     expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(1)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+    expect(h.pulses.snapshot()[0]?.onPending).toBe(true)
+
+    on.answers[1]?.(okReply)
+    await advance(2000)
+    expect(h.putCalls.filter((c) => c.value === 0)).toHaveLength(2)
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
 
