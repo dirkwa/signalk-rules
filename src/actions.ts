@@ -255,6 +255,8 @@ interface ActivePulse extends PersistedPulse {
   pulseTimer: NodeJS.Timeout | null
   revertRetryTimer: NodeJS.Timeout | null
   reverting: boolean
+  /** Only the latest revert may release the record or retry. */
+  revertGen: number
   /** An attempt of its ON-PUT may still answer. */
   onMayLand: MayLand
   /** An ON-PUT still unanswered may land until then: only an OFF sent from then on is the last. */
@@ -338,6 +340,7 @@ export class PulseManager {
         ...rec,
         pulseTimer: null,
         revertRetryTimer: null,
+        revertGen: 0,
         reverting: true,
         onMayLand: () => false,
         onDeadlineMono: rec.onPending === true ? this.onDeadline() : null
@@ -396,6 +399,7 @@ export class PulseManager {
       deadlineWall: this.deps.wallMs() + seconds * 1000,
       pulseTimer: null,
       revertRetryTimer: null,
+      revertGen: 0,
       reverting: false,
       onMayLand: () => true,
       onDeadlineMono: null
@@ -531,10 +535,16 @@ export class PulseManager {
 
   private revert(pulse: ActivePulse, reason: string): void {
     pulse.reverting = true
+    const gen = ++pulse.revertGen
     const sentMono = this.deps.monoMs()
     this.deps.putExec.request(pulse.target, pulse.revertValue, (ok, detail) => {
       const key = this.key(pulse.ruleId, pulse.target)
-      if (this.direct || this.active.get(key) !== pulse) return
+      if (
+        this.direct ||
+        pulse.revertGen !== gen ||
+        this.active.get(key) !== pulse
+      )
+        return
       if (ok && this.waitForOn(pulse)) return
       if (
         ok &&
@@ -639,10 +649,16 @@ export class PulseManager {
 
   private revertDirect(pulse: ActivePulse): void {
     pulse.reverting = true
+    const gen = ++pulse.revertGen
     const key = this.key(pulse.ruleId, pulse.target)
     const sentMono = this.deps.monoMs()
     this.directOnce(pulse.target, pulse.revertValue, (ok, detail) => {
-      if (this.abandoned || this.active.get(key) !== pulse) return
+      if (
+        this.abandoned ||
+        pulse.revertGen !== gen ||
+        this.active.get(key) !== pulse
+      )
+        return
       if (ok && this.waitForOn(pulse)) return
       if (
         ok &&

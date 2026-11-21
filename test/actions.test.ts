@@ -67,6 +67,28 @@ describe('PutExecutor', () => {
     exec.dispose()
   })
 
+  it("takes a rejection after the timeout as the attempt's one late answer", async () => {
+    let reject: ((err: Error) => void) | undefined
+    const put: PutFn = () =>
+      new Promise((_resolve, rej) => {
+        reject = rej
+      })
+    const exec = new PutExecutor(put, {
+      monoMs: () => mono,
+      timeoutMs: 1000,
+      retryDelayMs: 100_000
+    })
+    const late = vi.fn()
+    const mayLand = exec.request('a.b', 1, () => undefined, late)
+    await advance(1000)
+    expect(mayLand()).toBe(true)
+    reject?.(new Error('handler gone'))
+    await flush()
+    expect(late).toHaveBeenCalledWith(false)
+    exec.dispose()
+    expect(mayLand()).toBe(false)
+  })
+
   it('retries once on failure, then reports failure', async () => {
     let attempts = 0
     const put: PutFn = async () => {
@@ -443,6 +465,40 @@ describe('PulseManager', () => {
 
     on.answers[1]?.(okReply)
     await flush()
+    expect(h.directCalls).toHaveLength(3)
+    expect(h.pulses.isActive('r1', 'sw')).toBe(false)
+  })
+
+  it('lets only the latest OFF release the record, so a stale OFF cannot hide a failed corrective one', async () => {
+    const on = pendingOn()
+    let firstOff: ((reply: unknown) => void) | undefined
+    let direct = 0
+    const h = pulseHarness({
+      put: on.put,
+      direct: async (_p, _v, cb) => {
+        direct++
+        if (direct === 1) {
+          firstOff = cb
+          return { state: 'PENDING' }
+        }
+        if (direct === 2) throw new Error('bus busy')
+        return okReply
+      }
+    })
+    h.pulses.start('r1', 'sw', 1, 0, 30)
+    await flush()
+    h.pulses.revertAllUntilDone()
+    h.putExec.dispose()
+    await flush()
+
+    on.answers[0]?.(okReply)
+    await flush()
+    expect(h.directCalls).toHaveLength(2)
+    firstOff?.(okReply)
+    await flush()
+    expect(h.pulses.isActive('r1', 'sw')).toBe(true)
+
+    await advance(5000)
     expect(h.directCalls).toHaveLength(3)
     expect(h.pulses.isActive('r1', 'sw')).toBe(false)
   })
